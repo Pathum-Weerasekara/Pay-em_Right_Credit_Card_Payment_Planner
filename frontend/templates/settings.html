@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - Pay'em Right</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container animate-fade-in">
+        <header>
+            <div class="brand">
+                <span class="logo-icon">⚙️</span>
+                <h1>Settings - Pay'em Right</h1>
+            </div>
+            <nav class="nav-links">
+                <!-- Redirects back to June 2026 as default monthly dashboard -->
+                <a href="/dashboard/2026/06" class="btn btn-secondary">← Back to Dashboard</a>
+            </nav>
+        </header>
+
+        {% if success_msg %}
+        <div class="alert alert-success">
+            <span>✅</span>
+            <div>{{ success_msg }}</div>
+        </div>
+        {% endif %}
+
+        {% if error_msg %}
+        <div class="alert alert-error">
+            <span>⚠️</span>
+            <div>{{ error_msg }}</div>
+        </div>
+        {% endif %}
+
+        <div class="grid-2">
+            <!-- Left Column: Core YNAB Config -->
+            <div>
+                <!-- YNAB Token & Budget Form -->
+                <div class="card">
+                    <h3 style="margin-bottom: 1.5rem; font-weight: 600;">YNAB Integration Setup</h3>
+                    
+                    <form action="/settings" method="post">
+                        <!-- YNAB API Token -->
+                        <div class="form-group">
+                            <label for="ynab_token">YNAB Personal Access Token</label>
+                            <input type="password" name="ynab_token" id="ynab_token" class="form-control" 
+                                   placeholder="{% if token_valid %}••••••••••••••••••••••••••••••••{% else %}Enter your YNAB Personal Access Token{% endif %}"
+                                   value="">
+                            <span style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem; display: block;">
+                                The token is saved in a local <code>.env</code> file. We never send it anywhere except the secure YNAB API.
+                            </span>
+                        </div>
+
+                        <!-- Token Connection Status Badge -->
+                        <div style="margin-bottom: 1.5rem;">
+                            <span style="font-size: 0.85rem; color: var(--text-secondary); margin-right: 0.5rem;">Connection Status:</span>
+                            {% if token_valid %}
+                                <span class="badge badge-paid">Connected to YNAB API</span>
+                            {% else %}
+                                <span class="badge badge-short">Not Connected / Invalid Token</span>
+                            {% endif %}
+                        </div>
+
+                        <!-- Active YNAB Budget Selection -->
+                        <div class="form-group">
+                            <label for="budget_id">Active YNAB Budget</label>
+                            {% if token_valid %}
+                                <select name="budget_id" id="budget_id" class="form-control">
+                                    <option value="">-- Select a Budget --</option>
+                                    {% for budget in budgets %}
+                                    <option value="{{ budget.id }}" {% if sys_settings and sys_settings.ynab_budget_id == budget.id %}selected{% endif %}>
+                                        {{ budget.name }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            {% else %}
+                                <select class="form-control" disabled>
+                                    <option>Enter a valid API Token above first</option>
+                                </select>
+                            {% endif %}
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" style="margin-top: 0.5rem;">Save Settings</button>
+                    </form>
+                </div>
+
+                <!-- Account Roles Config -->
+                <div class="card">
+                    <h3 style="margin-bottom: 1rem; font-weight: 600;">Account Role Mapping &amp; Status</h3>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
+                        Define which checking or savings accounts represent cash/income inflows, and choose which credit cards to display.
+                    </p>
+
+                    {% if accounts %}
+                    <form action="/settings/accounts-sync" method="post">
+                        <div class="table-responsive" style="margin-bottom: 1.5rem;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Account Name</th>
+                                        <th>YNAB Type</th>
+                                        <th>Is Cash Inflow Account?</th>
+                                        <th>Is Active?</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for acc in accounts %}
+                                    <tr>
+                                        <td style="font-weight: 500;">{{ acc.name }}</td>
+                                        <td>
+                                            <span style="font-size: 0.8rem; padding: 0.2rem 0.4rem; background: rgba(255,255,255,0.05); border-radius: 4px; color: var(--text-secondary);">
+                                                {{ acc.type }}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            {% if acc.type in ['checking', 'savings'] or acc.is_cash %}
+                                            <label class="checkbox-label">
+                                                <input type="checkbox" name="cash_{{ acc.ynab_account_id }}" value="true" {% if acc.is_cash %}checked{% endif %}>
+                                                <span style="font-size: 0.85rem; color: var(--text-secondary);">Yes</span>
+                                            </label>
+                                            {% else %}
+                                            <span style="color: var(--text-muted); font-size: 0.85rem;">N/A (Credit Card)</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <label class="checkbox-label">
+                                                <input type="checkbox" name="active_{{ acc.ynab_account_id }}" value="true" {% if acc.is_active %}checked{% endif %}>
+                                                <span style="font-size: 0.85rem; color: var(--text-secondary);">Active</span>
+                                            </label>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <button type="submit" class="btn btn-success">Update Account Statuses</button>
+                    </form>
+                    
+                    {% set has_placeholder = namespace(value=false) %}
+                    {% for acc in accounts %}
+                        {% if acc.ynab_account_id.startswith('ynab_') %}
+                            {% set has_placeholder.value = true %}
+                        {% endif %}
+                    {% endfor %}
+                    {% if has_placeholder.value %}
+                    <div style="margin-top: 1.5rem; padding: 1rem; border-radius: var(--border-radius-md); background: var(--accent-warning-bg); border: 1px solid rgba(255, 184, 108, 0.3);">
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+                            <div>
+                                <div style="font-weight: 600; color: var(--accent-warning); margin-bottom: 0.35rem;">⚠️ Placeholder Accounts Detected</div>
+                                <div style="font-size: 0.85rem; color: var(--text-secondary);">Accounts starting with <code>ynab_</code> are placeholders from the initial setup. After connecting to YNAB and syncing, you should deactivate these.</div>
+                            </div>
+                            <form action="/accounts/deactivate-seeds" method="post" style="flex-shrink: 0;">
+                                <button type="submit" class="btn" style="background: var(--accent-warning); color: #0f0c1b; font-weight: 600; white-space: nowrap;">Deactivate Placeholders</button>
+                            </form>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% else %}
+                    <div style="text-align: center; padding: 2rem; color: var(--text-muted); border: 1px dashed var(--panel-border); border-radius: var(--border-radius-md);">
+                        No accounts synced. Connect to YNAB and sync on the dashboard first.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Right Column: API instructions -->
+            <div>
+                <div class="card">
+                    <h3 style="margin-bottom: 1rem; font-weight: 600;">How to get YNAB API Token</h3>
+                    <ol style="padding-left: 1.2rem; font-size: 0.9rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.75rem;">
+                        <li>Log in to your <strong>YNAB account</strong> on a web browser.</li>
+                        <li>Go to your <strong>Account Settings</strong> (click your profile in bottom-left corner and choose Settings).</li>
+                        <li>Scroll down to the <strong>Developer Settings</strong> section and click <strong>Manage Developer Settings</strong> (or go to <a href="https://app.ynab.com/settings/developer" target="_blank" style="color: var(--accent-primary); text-decoration: none; hover: text-decoration: underline;">app.ynab.com/settings/developer</a>).</li>
+                        <li>Under <strong>Personal Access Tokens</strong>, click <strong>New Token</strong>.</li>
+                        <li>Enter your password and a description (e.g. <em>Local CC Planner</em>).</li>
+                        <li>Copy the generated token immediately (it will only be shown once).</li>
+                        <li>Paste the token into the <strong>YNAB Personal Access Token</strong> field on this page and click <strong>Save Settings</strong>.</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

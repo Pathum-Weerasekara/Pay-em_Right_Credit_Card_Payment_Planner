@@ -1,0 +1,29 @@
+# Secret & Configuration files
+.env
+.env.local
+*.env
+
+# SQLite Database files (protects private transaction data)
+*.db
+*.sqlite
+*.sqlite3
+backend/planner.db
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# IDE / Gemini Artifacts / OS files
+.gemini/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# Scratch scripts
+scratch/
+clean_placeholders.py
+check_render.py

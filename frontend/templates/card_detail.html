@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ card.name }} Details - Pay'em Right</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container animate-fade-in">
+        <header>
+            <div class="brand">
+                <span class="logo-icon">💳</span>
+                <h1>{{ card.name }} Details</h1>
+            </div>
+            <nav class="nav-links">
+                <a href="/dashboard/{{ year }}/{{ month }}" class="btn btn-secondary">← Back to Dashboard</a>
+                <a href="/settings" class="btn btn-secondary">Settings</a>
+            </nav>
+        </header>
+
+        {% if success_msg %}
+        <div class="alert alert-success">
+            <span>✅</span>
+            <div>{{ success_msg }}</div>
+        </div>
+        {% endif %}
+
+        <div style="margin-bottom: 2rem;">
+            <h2>Month: {{ display_month }}</h2>
+        </div>
+
+        <div class="detail-grid">
+            <!-- Left Column: Card info & transactions -->
+            <div>
+                <!-- Card Overview -->
+                <div class="card" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1.25rem;">
+                    <div>
+                        <span style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Current Balance</span>
+                        <div style="font-size: 1.5rem; font-weight: 700; {% if card.balance < 0 %}color: var(--accent-danger);{% endif %}">{{ card.balance | currency }}</div>
+                    </div>
+                    <div>
+                        <span style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Spent This Month</span>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--text-primary);">{{ (summary.cc_spending if summary else 0) | currency }}</div>
+                    </div>
+                    <div>
+                        <span style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">YNAB Available</span>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--accent-success);">{{ (summary.available_for_payment if summary else 0) | currency }}</div>
+                    </div>
+                    <div>
+                        <span style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Carry Forward</span>
+                        <div style="font-size: 1.5rem; font-weight: 700; {% if carry_forward > 0 %}color: var(--accent-warning);{% else %}color: var(--text-muted);{% endif %}">{{ carry_forward | currency }}</div>
+                    </div>
+                </div>
+
+                <!-- Purchases -->
+                <div class="card">
+                    <h3 style="font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">Purchases this Month ({{ purchases|length }})</h3>
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Payee</th>
+                                    <th>Category</th>
+                                    <th>Memo</th>
+                                    <th style="text-align: right;">Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for tx in purchases %}
+                                <tr>
+                                    <td>{{ tx.date }}</td>
+                                    <td style="font-weight: 500;">{{ tx.payee_name or '-' }}</td>
+                                    <td>
+                                        <span style="font-size: 0.85rem; padding: 0.2rem 0.5rem; background: rgba(255,255,255,0.05); border-radius: 4px; color: var(--text-secondary);">
+                                            {{ tx.category_name or '-' }}
+                                        </span>
+                                    </td>
+                                    <td style="color: var(--text-secondary); font-size: 0.9rem;">{{ tx.memo or '-' }}</td>
+                                    <td style="font-family: monospace; text-align: right; color: var(--accent-danger); font-weight: 600;">
+                                        {{ tx.amount | currency }}
+                                    </td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="5" style="text-align: center; padding: 2rem; color: var(--text-muted);">No purchases recorded this month.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Payments and Credits -->
+                <div class="card">
+                    <h3 style="font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">Payments &amp; Credits</h3>
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Type</th>
+                                    <th>Payee</th>
+                                    <th>Memo</th>
+                                    <th style="text-align: right;">Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for tx in payments %}
+                                <tr>
+                                    <td>{{ tx.date }}</td>
+                                    <td><span class="badge badge-paid">Payment</span></td>
+                                    <td style="font-weight: 500;">{{ tx.payee_name or 'Transfer' }}</td>
+                                    <td style="color: var(--text-secondary); font-size: 0.9rem;">{{ tx.memo or '-' }}</td>
+                                    <td style="font-family: monospace; text-align: right; color: var(--accent-success); font-weight: 600;">
+                                        +{{ tx.amount | currency }}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                                {% for tx in credits %}
+                                <tr>
+                                    <td>{{ tx.date }}</td>
+                                    <td><span class="badge badge-covered" style="background: rgba(80, 250, 123, 0.15); color: #50fa7b;">Refund/Credit</span></td>
+                                    <td style="font-weight: 500;">{{ tx.payee_name or '-' }}</td>
+                                    <td style="color: var(--text-secondary); font-size: 0.9rem;">{{ tx.memo or '-' }}</td>
+                                    <td style="font-family: monospace; text-align: right; color: #50fa7b; font-weight: 600;">
+                                        +{{ tx.amount | currency }}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                                {% if not payments and not credits %}
+                                <tr>
+                                    <td colspan="5" style="text-align: center; padding: 2rem; color: var(--text-muted);">No payments or credits recorded this month.</td>
+                                </tr>
+                                {% endif %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Planning edit form -->
+            <div>
+                <div class="card" style="position: sticky; top: 2rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                        <h3 style="font-weight: 600;">Local Payment Plan</h3>
+                        <div>
+                            {% if status == "Paid" %}
+                                <span class="badge badge-paid">Paid</span>
+                            {% elif status == "Covered" %}
+                                <span class="badge badge-covered">Covered</span>
+                            {% elif status == "Short" %}
+                                <span class="badge badge-short">Short</span>
+                            {% elif status == "Over-reserved" %}
+                                <span class="badge badge-over-reserved">Over-reserved</span>
+                            {% else %}
+                                <span class="badge badge-needs-review">Needs Plan</span>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <form action="/card/{{ card.ynab_account_id }}/{{ year }}/{{ month }}/plan" method="post">
+                        <!-- Planned Amount -->
+                        <div class="form-group">
+                            <label for="planned_amount">Planned Payment Amount ($)</label>
+                            <input type="number" step="0.01" name="planned_amount" id="planned_amount" class="form-control" 
+                                   value="{{ plan.planned_amount | to_currency_raw }}" required style="font-weight: 600; font-size: 1.1rem; color: var(--accent-primary);">
+                        </div>
+
+                        <!-- Target Payment Date -->
+                        <div class="form-group">
+                            <label for="planned_payment_date">Planned Payment Date</label>
+                            <input type="date" name="planned_payment_date" id="planned_payment_date" class="form-control" 
+                                   value="{{ plan.planned_payment_date or '' }}">
+                        </div>
+
+                        <div class="form-row">
+                            <!-- Payer -->
+                            <div class="form-group">
+                                <label for="payer">Assign Payer</label>
+                                <select name="payer" id="payer" class="form-control" required>
+                                    {% for p in payers %}
+                                    <option value="{{ p }}" {% if plan.payer == p %}selected{% endif %}>{{ p }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+
+                            <!-- Payment Type -->
+                            <div class="form-group">
+                                <label for="payment_type">Payment Type</label>
+                                <select name="payment_type" id="payment_type" class="form-control" required>
+                                    <option value="Man" {% if plan.payment_type == "Man" %}selected{% endif %}>Manual (Man)</option>
+                                    <option value="Auto" {% if plan.payment_type == "Auto" %}selected{% endif %}>Automatic (Auto)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <!-- Due Date Day -->
+                            <div class="form-group">
+                                <label for="due_date">Due Date (Day of Month)</label>
+                                <input type="number" min="1" max="31" name="due_date" id="due_date" class="form-control" 
+                                       placeholder="e.g. 15" value="{{ plan.due_date or '' }}">
+                            </div>
+
+                            <!-- Minimum Payment -->
+                            <div class="form-group">
+                                <label for="min_payment">Min Payment ($)</label>
+                                <input type="number" step="0.01" name="min_payment" id="min_payment" class="form-control" 
+                                       value="{{ plan.min_payment | to_currency_raw }}">
+                            </div>
+                        </div>
+
+                        <!-- Reconciled / Done Checkbox -->
+                        <div class="form-group" style="margin-top: 1.5rem; margin-bottom: 1.5rem;">
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="is_done" value="true" {% if plan.is_done %}checked{% endif %}>
+                                <span>Mark Payment as Completed (Done)</span>
+                            </label>
+                        </div>
+
+                        <!-- Notes -->
+                        <div class="form-group">
+                            <label for="notes">Notes / Details</label>
+                            <textarea name="notes" id="notes" class="form-control" rows="4" placeholder="Add custom notes here...">{{ plan.notes or '' }}</textarea>
+                        </div>
+
+                        <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 1rem; font-size: 1rem;">Save Payment Plan</button>
+                    </form>
+                    
+                    <p style="font-size: 0.75rem; color: var(--text-muted); text-align: center; margin-top: 1rem;">
+                        Note: Edits to this planning card are saved locally in SQLite and are NOT written back to YNAB.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

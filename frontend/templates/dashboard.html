@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pay'em Right - CC Payment Planner</title>
+    <meta name="description" content="Monthly credit card payment planning dashboard. Track spending, plan payments, and monitor payer budgets.">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container animate-fade-in">
+
+    <!-- Header -->
+    <header>
+        <div class="brand">
+            <span class="logo-icon">💳</span>
+            <h1>Pay'em Right - CC Payment Planner</h1>
+        </div>
+        <nav class="nav-links">
+            <a href="/dashboard/{{ year }}/{{ month }}" class="btn btn-secondary">Dashboard</a>
+            <a href="/settings" class="btn btn-secondary">Settings</a>
+            {% if token_configured %}
+            <form action="/sync/{{ year }}/{{ month }}" method="post" style="display:inline;">
+                <button type="submit" class="btn btn-primary">🔄 Sync YNAB</button>
+            </form>
+            {% else %}
+            <a href="/settings" class="btn btn-primary">⚠️ Configure YNAB</a>
+            {% endif %}
+        </nav>
+    </header>
+
+    <!-- Alerts -->
+    {% if success_msg %}
+    <div class="alert alert-success"><span>✅</span><div>{{ success_msg }}</div></div>
+    {% endif %}
+    {% if error_msg %}
+    <div class="alert alert-error"><span>⚠️</span><div>{{ error_msg }}</div></div>
+    {% endif %}
+
+    <!-- Month Switcher -->
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2rem;">
+        <div class="month-switcher">
+            <a href="/dashboard/{{ prev_year }}/{{ prev_month }}" class="btn btn-secondary">&lt; Prev</a>
+            <h2>{{ display_month }}</h2>
+            <a href="/dashboard/{{ next_year }}/{{ next_month }}" class="btn btn-secondary">Next &gt;</a>
+        </div>
+        <div style="font-size:0.85rem; color:var(--text-muted);">
+            {% if settings and settings.last_synced_at %}
+            Last Synced: {{ settings.last_synced_at.strftime('%Y-%m-%d %H:%M') }} UTC
+            {% else %}
+            Never Synced
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════
+         PAYER BUDGET CARDS
+    ════════════════════════════════════════════════ -->
+    <h3 class="section-title">💰 Payer Budgets — {{ display_month }}</h3>
+    <div class="payer-section" id="payer-section">
+        {% for p in payer_data %}
+        <div class="card payer-card {{ p.name.lower() }}" id="payer-card-{{ p.name.lower() }}">
+            <!-- Card top bar -->
+            <div class="payer-header">
+                <span class="payer-name">{{ p.name }}</span>
+                {% set used_pct = 0 %}
+                {% if p.starting_cash > 0 %}
+                    {% set used_pct = ((p.starting_cash - p.remaining) / p.starting_cash * 100) | round(0) | int %}
+                {% endif %}
+                <span class="usage-badge {% if used_pct > 100 %}danger{% elif used_pct > 85 %}warn{% endif %}">
+                    {{ used_pct }}% Used
+                </span>
+            </div>
+
+            <!-- Budget breakdown rows -->
+            <div class="budget-breakdown">
+                <!-- Inflow row (editable) -->
+                <div class="budget-row">
+                    <span class="brow-label">📥 Monthly Inflow</span>
+                    <form action="/payer-limit/{{ year }}/{{ month }}" method="post" class="inline-edit-form">
+                        <input type="hidden" name="payer_id" value="{{ p.id }}">
+                        <div class="inline-edit-wrap">
+                            <span class="currency-prefix">$</span>
+                            <input type="number" step="0.01" name="starting_cash"
+                                   value="{{ p.starting_cash | to_currency_raw }}"
+                                   class="inline-number-input payer-inflow"
+                                   data-payer="{{ p.name.lower() }}"
+                                   id="inflow-{{ p.name.lower() }}" required>
+                            <button type="submit" class="mini-save-btn">Save</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Zelle row (auto-detected) -->
+                {% if p.zelle_outflows > 0 %}
+                <div class="budget-row deduct-row">
+                    <span class="brow-label">
+                        <span class="auto-badge">AUTO</span> 📤 Zelle Transfers
+                    </span>
+                    <span class="brow-value deduct">− {{ p.zelle_outflows | currency }}</span>
+                </div>
+                {% endif %}
+
+                <!-- CC Allocations row -->
+                <div class="budget-row deduct-row">
+                    <span class="brow-label">💳 CC Planned Payments</span>
+                    <span class="brow-value deduct payer-cc-total" id="cc-total-{{ p.name.lower() }}">
+                        − {{ p.cc_planned_total | currency }}
+                    </span>
+                </div>
+
+                <!-- Manual Outflows row -->
+                {% if p.manual_total > 0 %}
+                <div class="budget-row deduct-row">
+                    <span class="brow-label">📋 Manual Outflows</span>
+                    <span class="brow-value deduct">− {{ p.manual_total | currency }}</span>
+                </div>
+                {% endif %}
+
+                <!-- Divider + Remaining -->
+                <div class="budget-divider"></div>
+                <div class="budget-row remaining-row">
+                    <span class="brow-label" style="font-weight:700;">Remaining Balance</span>
+                    <span class="brow-value remaining-val {% if p.remaining < 0 %}negative{% else %}positive{% endif %}"
+                          id="remaining-{{ p.name.lower() }}">
+                        {{ p.remaining | currency }}
+                    </span>
+                </div>
+            </div>
+
+            <!-- Progress bar -->
+            <div class="progress-container" style="margin-top:1rem;">
+                {% set bar_pct = [used_pct, 100] | min %}
+                <div class="progress-bar {% if used_pct > 100 %}danger{% elif used_pct > 85 %}warn{% endif %}"
+                     style="width:{{ bar_pct }}%;"></div>
+            </div>
+
+            <!-- Manual Outflows List -->
+            <div class="manual-outflows-section">
+                <div class="manual-outflows-header">
+                    <span style="font-size:0.85rem; font-weight:600; color:var(--text-secondary);">Manual Outflows</span>
+                    <button type="button" class="mini-add-btn" onclick="toggleAddOutflow('{{ p.name.lower() }}')">+ Add</button>
+                </div>
+
+                <!-- Add form (hidden by default) -->
+                <form action="/manual-outflow/{{ year }}/{{ month }}" method="post"
+                      class="add-outflow-form" id="add-outflow-{{ p.name.lower() }}" style="display:none;">
+                    <input type="hidden" name="payer" value="{{ p.name }}">
+                    <div class="add-outflow-fields">
+                        <input type="text" name="description" placeholder="e.g. To Sri Lanka" class="form-control" style="flex:2;" required>
+                        <input type="number" step="0.01" name="amount" placeholder="Amount" class="form-control" style="flex:1;" required>
+                        <button type="submit" class="btn btn-success" style="padding:0.4rem 0.8rem; font-size:0.85rem;">Add</button>
+                        <button type="button" class="btn btn-secondary" style="padding:0.4rem 0.8rem; font-size:0.85rem;"
+                                onclick="toggleAddOutflow('{{ p.name.lower() }}')">Cancel</button>
+                    </div>
+                </form>
+
+                <!-- Existing outflows -->
+                {% if p.manual_outflows %}
+                <div class="outflows-list">
+                    {% for mo in p.manual_outflows %}
+                    <div class="outflow-row" id="outflow-row-{{ mo.id }}">
+                        <span class="outflow-desc" id="desc-display-{{ mo.id }}">{{ mo.description }}</span>
+                        <span class="outflow-amount">{{ mo.amount | currency }}</span>
+                        <div class="outflow-actions">
+                            <button type="button" class="icon-btn edit-btn"
+                                    onclick="toggleEditOutflow({{ mo.id }})">✏️</button>
+                            <form action="/manual-outflow/{{ mo.id }}/delete" method="post" style="display:inline;">
+                                <input type="hidden" name="year" value="{{ year }}">
+                                <input type="hidden" name="month" value="{{ month }}">
+                                <button type="submit" class="icon-btn delete-btn"
+                                        onclick="return confirm('Delete this outflow?')">🗑️</button>
+                            </form>
+                        </div>
+                        <!-- Inline edit form -->
+                        <form action="/manual-outflow/{{ mo.id }}/edit" method="post"
+                              class="edit-outflow-form" id="edit-form-{{ mo.id }}" style="display:none;">
+                            <input type="hidden" name="year" value="{{ year }}">
+                            <input type="hidden" name="month" value="{{ month }}">
+                            <input type="text" name="description" value="{{ mo.description }}"
+                                   class="form-control" style="flex:2; font-size:0.85rem;">
+                            <input type="number" step="0.01" name="amount"
+                                   value="{{ mo.amount | to_currency_raw }}"
+                                   class="form-control" style="flex:1; font-size:0.85rem;">
+                            <button type="submit" class="mini-save-btn">Save</button>
+                            <button type="button" class="mini-cancel-btn"
+                                    onclick="toggleEditOutflow({{ mo.id }})">Cancel</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div style="font-size:0.82rem; color:var(--text-muted); padding:0.5rem 0; font-style:italic;">
+                    No manual outflows this month.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
+        <div class="card" style="text-align:center; color:var(--text-secondary); padding:2rem;">
+            No payer data. Sync YNAB first or check Settings.
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- ═══════════════════════════════════════════════
+         TOP-LINE SUMMARY
+    ════════════════════════════════════════════════ -->
+    <div class="summary-grid" style="margin-bottom:2rem;">
+        <div class="card summary-card">
+            <span class="label">Total Household Inflow</span>
+            <span class="value" style="color:var(--accent-success);">{{ total_earnings | currency }}</span>
+            <span class="meta">YNAB Inflow: {{ total_income | currency }}</span>
+        </div>
+        <div class="card summary-card">
+            <span class="label">Total CC Spending</span>
+            <span class="value" style="color:var(--accent-primary);">{{ total_spending | currency }}</span>
+            <span class="meta">All active cards this month</span>
+        </div>
+        <div class="card summary-card">
+            <span class="label">Total Planned Payments</span>
+            <span class="value" style="color:var(--accent-primary);" id="summary-total-planned">{{ total_planned | currency }}</span>
+            <span class="meta">Across all cards</span>
+        </div>
+        <div class="card summary-card">
+            <span class="label">Total Remaining</span>
+            <span class="value {% if total_remaining < 0 %}style="color:var(--accent-danger);"{% else %}style="color:var(--accent-success);"{% endif %}"
+                  id="summary-total-remaining">{{ total_remaining | currency }}</span>
+            <span class="meta">After all allocations</span>
+        </div>
+    </div>
+
+    <!-- CC TABLE — INLINE PLANNING -->
+    <div class="card" style="margin-bottom:2rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; flex-wrap:wrap; gap:1rem;">
+            <h3 class="section-title" style="margin:0;">💳 Credit Cards — {{ display_month }}</h3>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; gap:1rem;">
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+                <button type="button" class="btn btn-secondary" onclick="refreshFilteredCards()" style="padding:0.5rem 1rem;">
+                    🔄 Refresh Table
+                </button>
+                <button type="button" class="btn btn-secondary" onclick="setAllCheckboxes(true)" style="padding:0.5rem 0.75rem; font-size:0.85rem;">
+                    Select All
+                </button>
+                <button type="button" class="btn btn-secondary" onclick="setAllCheckboxes(false)" style="padding:0.5rem 0.75rem; font-size:0.85rem;">
+                    Clear All
+                </button>
+            </div>
+            <button type="submit" form="cc-plan-form" class="btn btn-success" style="padding:0.5rem 1.25rem;">
+                💾 Save All Plans
+            </button>
+        </div>
+
+        <form id="cc-plan-form" action="/card-plan-inline/{{ year }}/{{ month }}" method="post">
+        <div class="table-responsive">
+        <table id="cc-table">
+            <thead>
+                <tr>
+                    <th style="width:40px; text-align:center;">
+                        <input type="checkbox" id="master-select-check" onchange="toggleMasterSelect(this.checked)" title="Select/Deselect All">
+                    </th>
+                    <th>Card Name</th>
+                    <th style="text-align:right;">Spent This Month</th>
+                    <th style="text-align:right; min-width:140px;">Planned Payment</th>
+                    <th style="min-width:160px;">Pay From</th>
+                    <th style="text-align:right;">Unpaid Balance</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for card in card_list %}
+                <tr class="cc-row"
+                    id="row-{{ card.account_id }}"
+                    data-account="{{ card.account_id }}"
+                    data-spending="{{ card.spending }}">
+                    <td style="text-align:center;">
+                        <input type="checkbox"
+                               class="card-select-check"
+                               data-account="{{ card.account_id }}"
+                               {% if card.spending > 0 or card.planned_payment > 0 %}checked{% endif %}>
+                    </td>
+                    <td style="font-weight:600; color:var(--text-primary);">{{ card.name }}</td>
+                    <td style="text-align:right; font-family:monospace; font-weight:700;
+                               color:{% if card.spending > 0 %}var(--text-primary){% else %}var(--text-muted){% endif %};">
+                        {{ card.spending | currency }}
+                    </td>
+                    <td style="text-align:right;">
+                        <div class="inline-plan-wrap">
+                            <span class="currency-prefix-sm">$</span>
+                            <input type="number" step="0.01" min="0"
+                                   name="planned_{{ card.account_id }}"
+                                   value="0"
+                                   placeholder="0.00"
+                                   class="plan-input"
+                                   data-account="{{ card.account_id }}"
+                                   data-spending="{{ card.spending }}"
+                                   data-payer-target="{{ card.from_account | lower }}"
+                                   oninput="onPlanChange(this)">
+                        </div>
+                    </td>
+                    <td>
+                        <select name="from_{{ card.account_id }}"
+                                class="plan-payer-select"
+                                data-account="{{ card.account_id }}"
+                                onchange="onPayerChange(this)">
+                            <option value="Pathum" {% if card.from_account == 'Pathum' %}selected{% endif %}>Spend – Pathum</option>
+                            <option value="Ramesha" {% if card.from_account == 'Ramesha' %}selected{% endif %}>Spend – Ramesha</option>
+                        </select>
+                    </td>
+                    <td style="text-align:right; font-family:monospace; font-weight:600;"
+                        id="unpaid-{{ card.account_id }}">
+                        <span class="unpaid-val {% if card.spending > 0 %}unpaid-nonzero{% endif %}">
+                            {{ card.spending | currency }}
+                        </span>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="empty-state">
+                        <div class="empty-state-icon">💳</div>
+                        <p>No active credit cards. Sync your YNAB budget to get started.</p>
+                    </td>
+                </tr>
+                {% endfor %}
+
+                <!-- Totals footer -->
+                <tr class="totals-row" id="totals-row">
+                    <td></td>
+                    <td style="font-weight:700; color:var(--text-secondary); font-size:0.85rem;">TOTALS</td>
+                    <td style="text-align:right; font-family:monospace; font-weight:700; color:var(--text-primary);" id="footer-total-spending">$0.00</td>
+                    <td style="text-align:right; font-family:monospace; font-weight:700; color:var(--accent-primary);" id="footer-total-planned">$0.00</td>
+                    <td></td>
+                    <td style="text-align:right; font-family:monospace; font-weight:700;" id="footer-total-unpaid"><span>$0.00</span></td>
+                </tr>
+            </tbody>
+        </table>
+        </div>
+        </form>
+    </div>
+
+</div><!-- /container -->
+
+<!-- ═══════════════════════════════════════════════
+     JAVASCRIPT — Live Remaining Balance Updates
+════════════════════════════════════════════════ -->
+<script>
+// ─── Payer state from server ─────────────────────────────────────────────────
+const payerState = {
+    {% for p in payer_data %}
+    "{{ p.name.lower() }}": {
+        inflow:  {{ p.starting_cash }},
+        zelle:   {{ p.zelle_outflows }},
+        manual:  {{ p.manual_total }},
+        ccTotal: 0,   // starts at 0 — user enters planned payments manually
+    },
+    {% endfor %}
+};
+
+// ─── Utilities ───────────────────────────────────────────────────────────────
+function fmtMu(mu) {
+    const sign = mu < 0 ? '-' : '';
+    return sign + '$' + Math.abs(mu / 1000).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function calcRemaining(payer) {
+    const s = payerState[payer];
+    return s.inflow - s.zelle - s.manual - s.ccTotal;
+}
+
+// ─── Table Filtering & Checkboxes ────────────────────────────────────────────
+function toggleMasterSelect(checked) {
+    document.querySelectorAll('.card-select-check').forEach(cb => {
+        cb.checked = checked;
+    });
+}
+
+function setAllCheckboxes(checked) {
+    const master = document.getElementById('master-select-check');
+    if (master) master.checked = checked;
+    toggleMasterSelect(checked);
+}
+
+
+function refreshFilteredCards() {
+    document.querySelectorAll('.cc-row').forEach(row => {
+        const accountId = row.dataset.account;
+        const cb = row.querySelector('.card-select-check');
+        const isChecked = cb ? cb.checked : false;
+        
+        row.style.display = isChecked ? '' : 'none';
+        
+        if (!isChecked) {
+            const inp = row.querySelector('.plan-input');
+            if (inp) inp.value = '0';
+        }
+    });
+    rebuildCCTotals();
+}
+
+// ─── Live balance rebuild ────────────────────────────────────────────────────
+function rebuildCCTotals() {
+    // Reset per-payer CC totals
+    for (const pk in payerState) payerState[pk].ccTotal = 0;
+
+    let grandPlanned  = 0;
+    let grandSpending = 0;
+    let grandUnpaid   = 0;
+
+    // Only count rows that are visible (i.e. checked & refreshed)
+    document.querySelectorAll('.cc-row').forEach(row => {
+        if (row.style.display === 'none') return;
+
+        const accountId = row.dataset.account;
+        const spending  = parseInt(row.dataset.spending) || 0;
+        const inp       = row.querySelector('.plan-input');
+        const sel       = row.querySelector('.plan-payer-select');
+
+        const planned   = inp  ? Math.round((parseFloat(inp.value) || 0) * 1000) : 0;
+        const payerKey  = sel  ? sel.value.toLowerCase() : 'pathum';
+
+        grandPlanned  += planned;
+        grandSpending += spending;
+        grandUnpaid   += Math.max(0, spending - planned);
+
+        if (payerState[payerKey] !== undefined) {
+            payerState[payerKey].ccTotal += planned;
+        }
+
+        // Update this row's unpaid cell
+        const unpaidCell = document.getElementById('unpaid-' + accountId);
+        if (unpaidCell) {
+            const unpaid = Math.max(0, spending - planned);
+            const span   = unpaidCell.querySelector('.unpaid-val');
+            if (span) {
+                span.textContent = fmtMu(unpaid);
+                span.className   = 'unpaid-val' + (unpaid > 0 ? ' unpaid-nonzero' : '');
+            }
+        }
+    });
+
+    // Footer totals
+    const ftSpend = document.getElementById('footer-total-spending');
+    if (ftSpend) ftSpend.textContent = fmtMu(grandSpending);
+
+    const ftPlan = document.getElementById('footer-total-planned');
+    if (ftPlan) ftPlan.textContent = fmtMu(grandPlanned);
+
+    const ftUnpaid = document.getElementById('footer-total-unpaid');
+    if (ftUnpaid) {
+        const sp = ftUnpaid.querySelector('span') || ftUnpaid;
+        sp.textContent = fmtMu(grandUnpaid);
+        sp.className   = grandUnpaid > 0 ? 'unpaid-nonzero' : '';
+    }
+
+    // Summary card — total planned
+    const summaryPlanned = document.getElementById('summary-total-planned');
+    if (summaryPlanned) summaryPlanned.textContent = fmtMu(grandPlanned);
+
+    // Update all payer cards
+    for (const pk in payerState) updatePayerDisplay(pk);
+}
+
+function updatePayerDisplay(payerKey) {
+    const remaining = calcRemaining(payerKey);
+
+    // Remaining balance
+    const remEl = document.getElementById('remaining-' + payerKey);
+    if (remEl) {
+        remEl.textContent = fmtMu(remaining);
+        remEl.className   = 'brow-value remaining-val ' + (remaining < 0 ? 'negative' : 'positive');
+    }
+
+    // CC total line in payer breakdown
+    const ccEl = document.getElementById('cc-total-' + payerKey);
+    if (ccEl) ccEl.textContent = '− ' + fmtMu(payerState[payerKey].ccTotal);
+
+    // Summary card total remaining
+    let totalRemaining = 0;
+    for (const pk in payerState) totalRemaining += calcRemaining(pk);
+    const summaryEl = document.getElementById('summary-total-remaining');
+    if (summaryEl) {
+        summaryEl.textContent = fmtMu(totalRemaining);
+        summaryEl.style.color = totalRemaining < 0 ? 'var(--accent-danger)' : 'var(--accent-success)';
+    }
+
+    // Progress bar + badge
+    const cardEl = document.getElementById('payer-card-' + payerKey);
+    if (cardEl) {
+        const s      = payerState[payerKey];
+        const spent  = s.zelle + s.manual + s.ccTotal;
+        const usedPct = s.inflow > 0 ? Math.round((spent / s.inflow) * 100) : 0;
+
+        const bar = cardEl.querySelector('.progress-bar');
+        if (bar) {
+            bar.style.width = Math.min(usedPct, 100) + '%';
+            bar.className   = 'progress-bar' + (usedPct > 100 ? ' danger' : usedPct > 85 ? ' warn' : '');
+        }
+        const badge = cardEl.querySelector('.usage-badge');
+        if (badge) {
+            badge.textContent = usedPct + '% Used';
+            badge.className   = 'usage-badge' + (usedPct > 100 ? ' danger' : usedPct > 85 ? ' warn' : '');
+        }
+    }
+}
+
+// ─── Event handlers ──────────────────────────────────────────────────────────
+function onPlanChange(input)  { rebuildCCTotals(); }
+function onPayerChange(select) { rebuildCCTotals(); }
+
+// ─── Manual outflow UI ───────────────────────────────────────────────────────
+function toggleAddOutflow(payerKey) {
+    const form = document.getElementById('add-outflow-' + payerKey);
+    if (form) form.style.display = form.style.display === 'none' ? 'flex' : 'none';
+}
+function toggleEditOutflow(id) {
+    const row      = document.getElementById('outflow-row-' + id);
+    const editForm = document.getElementById('edit-form-' + id);
+    if (!row || !editForm) return;
+    const isEditing = editForm.style.display !== 'none';
+    row.querySelectorAll('.outflow-desc, .outflow-amount, .outflow-actions').forEach(el => {
+        el.style.display = isEditing ? '' : 'none';
+    });
+    editForm.style.display = isEditing ? 'none' : 'flex';
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    refreshFilteredCards();
+});
+</script>
+</body>
+</html>
+
