@@ -6,9 +6,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from backend.database import engine, Base, get_db
-from backend.models import Account, Transaction, MonthlyCardSummary, PaymentPlan, PayerSummary, SystemSettings, ManualOutflow
+from backend.models import Account, Transaction, MonthlyCardSummary, PaymentPlan, PayerSummary, SystemSettings, ManualOutflow, PlaidItem
 from backend.sync_service import sync_data_from_ynab, get_days_in_month
+from backend.sync_service_plaid import sync_data_from_plaid
 from backend.ynab_client import YNABClient
+from backend.plaid_client import PlaidClientWrapper
 from backend.calculations import to_currency, to_milliunits, determine_status
 
 # Initialize DB tables
@@ -199,6 +201,9 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
         # Sum planned payments assigned to this payer
         p_planned_total = sum(c["planned_payment"] for c in card_list if c["from_account"] == p.payer_name)
         
+        # Sum pending planned payments (where is_done is False)
+        p_pending_planned = sum(c["planned_payment"] for c in card_list if c["from_account"] == p.payer_name and not c["is_done"])
+        
         # Get manual outflows for this payer this month
         manual_outflows = db.query(ManualOutflow).filter(
             ManualOutflow.month == month_str,
@@ -206,9 +211,11 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
         ).all()
         manual_total = sum(m.amount for m in manual_outflows)
         
-        # Remaining = Inflow - Zelle - Manual Outflows
-        # CC planned payments shown separately but also deducted from view
+        # Remaining = Inflow - Zelle - Manual Outflows - CC planned payments
         remaining = p.starting_cash - p.zelle_outflows - manual_total - p_planned_total
+        
+        # Projected Ending Balance = Current Bank Balance - Pending CC Payments - Manual Outflows
+        projected_ending_balance = p.current_bank_balance - p_pending_planned - manual_total
         
         payer_data.append({
             "id": p.id,
@@ -218,6 +225,9 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
             "manual_total": manual_total,
             "manual_outflows": manual_outflows,
             "cc_planned_total": p_planned_total,
+            "cc_pending_planned": p_pending_planned,
+            "current_bank_balance": p.current_bank_balance,
+            "projected_ending_balance": projected_ending_balance,
             "remaining": remaining,
         })
         
@@ -231,6 +241,7 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
     prev_year, prev_month = get_prev_next_month(int(year), int(month), -1)
     next_year, next_month = get_prev_next_month(int(year), int(month), 1)
     
+    plaid_configured = db.query(PlaidItem).count() > 0
     token_configured = bool(os.getenv("YNAB_API_TOKEN"))
     success_msg = request.query_params.get("success")
     error_msg = request.query_params.get("error")
@@ -255,6 +266,7 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
             "card_list": card_list,
             "payer_data": payer_data,
             "settings": settings,
+            "plaid_configured": plaid_configured,
             "token_configured": token_configured,
             "success_msg": success_msg,
             "error_msg": error_msg
@@ -332,7 +344,7 @@ async def save_card_plan_inline(year: str, month: str, request: Request, db: Ses
         status_code=status.HTTP_303_SEE_OTHER
     )
 
-@app.post("/manual-outflow/{year}/{month}", response_class=RedirectResponse)
+@app.post("/manual-outflow/add/{year}/{month}", response_class=RedirectResponse)
 async def add_manual_outflow(year: str, month: str, request: Request, db: Session = Depends(get_db)):
     """Add a new manual outflow entry for a payer."""
     form = await request.form()
@@ -359,7 +371,7 @@ async def add_manual_outflow(year: str, month: str, request: Request, db: Sessio
         status_code=status.HTTP_303_SEE_OTHER
     )
 
-@app.post("/manual-outflow/{outflow_id}/edit", response_class=RedirectResponse)
+@app.post("/manual-outflow/edit/{outflow_id}", response_class=RedirectResponse)
 async def edit_manual_outflow(outflow_id: int, request: Request, db: Session = Depends(get_db)):
     """Edit an existing manual outflow."""
     form = await request.form()
@@ -382,7 +394,7 @@ async def edit_manual_outflow(outflow_id: int, request: Request, db: Session = D
         status_code=status.HTTP_303_SEE_OTHER
     )
 
-@app.post("/manual-outflow/{outflow_id}/delete", response_class=RedirectResponse)
+@app.post("/manual-outflow/delete/{outflow_id}", response_class=RedirectResponse)
 async def delete_manual_outflow(outflow_id: int, request: Request, db: Session = Depends(get_db)):
     """Delete a manual outflow entry."""
     form = await request.form()
@@ -563,6 +575,7 @@ def read_settings(request: Request, db: Session = Depends(get_db)):
     # Read settings and active budget list
     sys_settings = db.query(SystemSettings).first()
     accounts = db.query(Account).order_by(Account.type, Account.name).all()
+    plaid_items = db.query(PlaidItem).all()
     
     token = os.getenv("YNAB_API_TOKEN")
     budgets = []
@@ -589,10 +602,12 @@ def read_settings(request: Request, db: Session = Depends(get_db)):
             "budgets": budgets,
             "token_valid": token_valid,
             "token": token,
+            "plaid_items": plaid_items,
             "success_msg": success_msg,
             "error_msg": error_msg
         }
     )
+
 
 @app.post("/settings", response_class=RedirectResponse)
 def save_settings(
@@ -718,3 +733,73 @@ def trigger_sync(year: str, month: str, db: Session = Depends(get_db)):
             url=f"/dashboard/{year}/{month}?error=Sync failed: {str(e)}", 
             status_code=status.HTTP_303_SEE_OTHER
         )
+
+@app.post("/api/create_link_token")
+def create_link_token():
+    try:
+        client = PlaidClientWrapper()
+        res = client.create_link_token()
+        return res
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/api/exchange_public_token")
+async def exchange_public_token(request: Request, db: Session = Depends(get_db)):
+    try:
+        form = await request.form()
+        public_token = form.get("public_token")
+        institution_name = form.get("institution_name", "Unknown Institution")
+        if not public_token:
+            return {"error": "Missing public_token"}
+            
+        client = PlaidClientWrapper()
+        res = client.exchange_public_token(public_token)
+        access_token = res.get("access_token")
+        item_id = res.get("item_id")
+        
+        # Check if already linked
+        existing = db.query(PlaidItem).filter(PlaidItem.item_id == item_id).first()
+        if not existing:
+            item = PlaidItem(
+                item_id=item_id,
+                access_token=access_token,
+                institution_name=institution_name
+            )
+            db.add(item)
+            db.commit()
+        return {"success": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/sync-plaid/{year}/{month}", response_class=RedirectResponse)
+def trigger_plaid_sync(year: str, month: str, db: Session = Depends(get_db)):
+    try:
+        sync_data_from_plaid(db, year, month)
+        return RedirectResponse(
+            url=f"/dashboard/{year}/{month}?success=Plaid data synced successfully", 
+            status_code=status.HTTP_303_SEE_OTHER
+        )
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return RedirectResponse(
+            url=f"/dashboard/{year}/{month}?error=Sync failed: {str(e)}", 
+            status_code=status.HTTP_303_SEE_OTHER
+        )
+
+@app.post("/payer-bank-balance/{year}/{month}", response_class=RedirectResponse)
+def update_payer_bank_balance(
+    year: str, 
+    month: str, 
+    payer_id: int = Form(...), 
+    current_bank_balance: float = Form(...),
+    db: Session = Depends(get_db)
+):
+    p_summary = db.query(PayerSummary).filter(PayerSummary.id == payer_id).first()
+    if p_summary:
+        p_summary.current_bank_balance = to_milliunits(current_bank_balance)
+        db.commit()
+    return RedirectResponse(
+        url=f"/dashboard/{year}/{month}?success=Bank balance updated", 
+        status_code=status.HTTP_303_SEE_OTHER
+    )

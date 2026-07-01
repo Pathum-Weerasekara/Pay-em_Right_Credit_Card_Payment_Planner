@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - Pay'em Right</title>
     <link rel="stylesheet" href="/static/style.css">
+    <!-- Plaid Link JS SDK -->
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
 </head>
 <body>
     <div class="container animate-fade-in">
@@ -34,62 +36,52 @@
         {% endif %}
 
         <div class="grid-2">
-            <!-- Left Column: Core YNAB Config -->
+            <!-- Left Column: Plaid Setup and Linked Accounts -->
             <div>
-                <!-- YNAB Token & Budget Form -->
+                <!-- Plaid Link Connection Card -->
                 <div class="card">
-                    <h3 style="margin-bottom: 1.5rem; font-weight: 600;">YNAB Integration Setup</h3>
+                    <h3 style="margin-bottom: 1.5rem; font-weight: 600;">Plaid Live Bank Feed Integration</h3>
                     
-                    <form action="/settings" method="post">
-                        <!-- YNAB API Token -->
-                        <div class="form-group">
-                            <label for="ynab_token">YNAB Personal Access Token</label>
-                            <input type="password" name="ynab_token" id="ynab_token" class="form-control" 
-                                   placeholder="{% if token_valid %}••••••••••••••••••••••••••••••••{% else %}Enter your YNAB Personal Access Token{% endif %}"
-                                   value="">
-                            <span style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem; display: block;">
-                                The token is saved in a local <code>.env</code> file. We never send it anywhere except the secure YNAB API.
-                            </span>
-                        </div>
+                    <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
+                        Securely link your credit cards and checking accounts directly using Plaid. The credentials you enter are sent straight to your bank via Plaid's secure portal—your logins are never visible to this application.
+                    </p>
 
-                        <!-- Token Connection Status Badge -->
-                        <div style="margin-bottom: 1.5rem;">
-                            <span style="font-size: 0.85rem; color: var(--text-secondary); margin-right: 0.5rem;">Connection Status:</span>
-                            {% if token_valid %}
-                                <span class="badge badge-paid">Connected to YNAB API</span>
-                            {% else %}
-                                <span class="badge badge-short">Not Connected / Invalid Token</span>
-                            {% endif %}
-                        </div>
+                    <!-- Link button -->
+                    <button type="button" id="plaid-link-btn" class="btn btn-primary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 0.5rem; font-weight: 600; padding: 0.8rem 1rem;">
+                        🏦 Link a New Bank or Credit Card
+                    </button>
 
-                        <!-- Active YNAB Budget Selection -->
-                        <div class="form-group">
-                            <label for="budget_id">Active YNAB Budget</label>
-                            {% if token_valid %}
-                                <select name="budget_id" id="budget_id" class="form-control">
-                                    <option value="">-- Select a Budget --</option>
-                                    {% for budget in budgets %}
-                                    <option value="{{ budget.id }}" {% if sys_settings and sys_settings.ynab_budget_id == budget.id %}selected{% endif %}>
-                                        {{ budget.name }}
-                                    </option>
-                                    {% endfor %}
-                                </select>
-                            {% else %}
-                                <select class="form-control" disabled>
-                                    <option>Enter a valid API Token above first</option>
-                                </select>
-                            {% endif %}
-                        </div>
-
-                        <button type="submit" class="btn btn-primary" style="margin-top: 0.5rem;">Save Settings</button>
-                    </form>
+                    <!-- Linked Items List -->
+                    <div style="margin-top: 2rem;">
+                        <h4 style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Linked Institutions</h4>
+                        {% if plaid_items %}
+                            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                                {% for item in plaid_items %}
+                                <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--panel-border); border-radius: var(--border-radius-md);">
+                                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                        <span style="font-size: 1.2rem;">🏛️</span>
+                                        <div>
+                                            <div style="font-weight: 600; font-size: 0.95rem;">{{ item.institution_name }}</div>
+                                            <div style="font-size: 0.75rem; color: var(--text-muted);">Linked on {{ item.created_at.strftime('%b %d, %Y') }}</div>
+                                        </div>
+                                    </div>
+                                    <span class="badge badge-paid">Active Link</span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <div style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; padding: 1rem; border: 1px dashed var(--panel-border); border-radius: var(--border-radius-md); text-align: center;">
+                                No bank accounts linked yet. Click the button above to link.
+                            </div>
+                        {% endif %}
+                    </div>
                 </div>
 
                 <!-- Account Roles Config -->
                 <div class="card">
                     <h3 style="margin-bottom: 1rem; font-weight: 600;">Account Role Mapping &amp; Status</h3>
                     <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
-                        Define which checking or savings accounts represent cash/income inflows, and choose which credit cards to display.
+                        Define which checking accounts represent cash/income inflows, and choose which credit cards to display.
                     </p>
 
                     {% if accounts %}
@@ -99,8 +91,8 @@
                                 <thead>
                                     <tr>
                                         <th>Account Name</th>
-                                        <th>YNAB Type</th>
-                                        <th>Is Cash Inflow Account?</th>
+                                        <th>Plaid Type</th>
+                                        <th>Is Cash Account?</th>
                                         <th>Is Active?</th>
                                     </tr>
                                 </thead>
@@ -137,50 +129,104 @@
 
                         <button type="submit" class="btn btn-success">Update Account Statuses</button>
                     </form>
-                    
-                    {% set has_placeholder = namespace(value=false) %}
-                    {% for acc in accounts %}
-                        {% if acc.ynab_account_id.startswith('ynab_') %}
-                            {% set has_placeholder.value = true %}
-                        {% endif %}
-                    {% endfor %}
-                    {% if has_placeholder.value %}
-                    <div style="margin-top: 1.5rem; padding: 1rem; border-radius: var(--border-radius-md); background: var(--accent-warning-bg); border: 1px solid rgba(255, 184, 108, 0.3);">
-                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
-                            <div>
-                                <div style="font-weight: 600; color: var(--accent-warning); margin-bottom: 0.35rem;">⚠️ Placeholder Accounts Detected</div>
-                                <div style="font-size: 0.85rem; color: var(--text-secondary);">Accounts starting with <code>ynab_</code> are placeholders from the initial setup. After connecting to YNAB and syncing, you should deactivate these.</div>
-                            </div>
-                            <form action="/accounts/deactivate-seeds" method="post" style="flex-shrink: 0;">
-                                <button type="submit" class="btn" style="background: var(--accent-warning); color: #0f0c1b; font-weight: 600; white-space: nowrap;">Deactivate Placeholders</button>
-                            </form>
-                        </div>
-                    </div>
-                    {% endif %}
                     {% else %}
                     <div style="text-align: center; padding: 2rem; color: var(--text-muted); border: 1px dashed var(--panel-border); border-radius: var(--border-radius-md);">
-                        No accounts synced. Connect to YNAB and sync on the dashboard first.
+                        No accounts loaded. Link a bank account via Plaid and sync on the dashboard first.
                     </div>
                     {% endif %}
                 </div>
             </div>
 
-            <!-- Right Column: API instructions -->
+            <!-- Right Column: API Instructions & Security Details -->
             <div>
                 <div class="card">
-                    <h3 style="margin-bottom: 1rem; font-weight: 600;">How to get YNAB API Token</h3>
-                    <ol style="padding-left: 1.2rem; font-size: 0.9rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.75rem;">
-                        <li>Log in to your <strong>YNAB account</strong> on a web browser.</li>
-                        <li>Go to your <strong>Account Settings</strong> (click your profile in bottom-left corner and choose Settings).</li>
-                        <li>Scroll down to the <strong>Developer Settings</strong> section and click <strong>Manage Developer Settings</strong> (or go to <a href="https://app.ynab.com/settings/developer" target="_blank" style="color: var(--accent-primary); text-decoration: none; hover: text-decoration: underline;">app.ynab.com/settings/developer</a>).</li>
-                        <li>Under <strong>Personal Access Tokens</strong>, click <strong>New Token</strong>.</li>
-                        <li>Enter your password and a description (e.g. <em>Local CC Planner</em>).</li>
-                        <li>Copy the generated token immediately (it will only be shown once).</li>
-                        <li>Paste the token into the <strong>YNAB Personal Access Token</strong> field on this page and click <strong>Save Settings</strong>.</li>
+                    <h3 style="margin-bottom: 1rem; font-weight: 600;">How to use Plaid Link</h3>
+                    <ol style="padding-left: 1.2rem; font-size: 0.9rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.75rem; line-height: 1.5;">
+                        <li>Make sure you have populated your <code>PLAID_CLIENT_ID</code>, <code>PLAID_SECRET</code>, and <code>PLAID_ENV</code> in your local <code>.env</code> file.</li>
+                        <li>Click the <strong>Link a New Bank or Credit Card</strong> button on the left.</li>
+                        <li>If in <strong>Sandbox</strong> environment, select any bank (e.g. <em>Chase</em>) and log in with Plaid's test username: <code>user_good</code> and password: <code>pass_good</code>.</li>
+                        <li>If in <strong>Development</strong> environment, select your real bank and log in using your real bank credentials. Plaid's UI will securely handle any Multi-Factor Authentication (MFA) prompts.</li>
+                        <li>Select which accounts (checking, savings, and credit cards) you want to sync.</li>
+                        <li>After linking successfully, go back to the <strong>Dashboard</strong> and click the <strong>Sync via Plaid</strong> button to fetch your real-time balances and monthly transactions!</li>
                     </ol>
+                </div>
+
+                <div class="card" style="border: 1px solid rgba(139, 92, 246, 0.2); background: rgba(139, 92, 246, 0.02);">
+                    <h3 style="margin-bottom: 1rem; font-weight: 600; color: var(--accent-primary);">🔒 Cybersecurity &amp; Privacy</h3>
+                    <p style="font-size: 0.88rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 0.75rem;">
+                        This application implements secure token-exchange architectures recommended by financial cybersecurity standards:
+                    </p>
+                    <ul style="padding-left: 1.2rem; font-size: 0.85rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.5rem; line-height: 1.4;">
+                        <li><strong>Tokenized Logins:</strong> Your bank username and password are never sent to or stored by this app. They are securely handled by Plaid Link.</li>
+                        <li><strong>Access Token Exchange:</strong> We only store a localized, encrypted Plaid <code>access_token</code> which can be easily revoked from your bank dashboard at any time.</li>
+                        <li><strong>Strict Offline Design:</strong> All data is stored locally in your SQLite database (<code>payment_planner.db</code>) and never uploaded to any cloud server.</li>
+                    </ul>
                 </div>
             </div>
         </div>
     </div>
+
+    <!-- Client-side Javascript Plaid Connection flow -->
+    <script>
+        const linkButton = document.getElementById('plaid-link-btn');
+        if (linkButton) {
+            linkButton.addEventListener('click', async () => {
+                try {
+                    linkButton.disabled = true;
+                    linkButton.innerText = 'Creating Link Session...';
+
+                    // 1. Fetch the Link Token from FastAPI backend
+                    const res = await fetch('/api/create_link_token', { method: 'POST' });
+                    const data = await res.json();
+                    
+                    if (data.error) {
+                        alert('Error creating Plaid Link Token: ' + data.error);
+                        linkButton.disabled = false;
+                        linkButton.innerHTML = '🏦 Link a New Bank or Credit Card';
+                        return;
+                    }
+
+                    // 2. Initialize Plaid Link
+                    const handler = Plaid.create({
+                        token: data.link_token,
+                        onSuccess: async (public_token, metadata) => {
+                            // 3. Send public token to FastAPI backend to exchange for access token
+                            const formData = new FormData();
+                            formData.append('public_token', public_token);
+                            formData.append('institution_name', metadata.institution.name);
+
+                            const exchangeRes = await fetch('/api/exchange_public_token', {
+                                method: 'POST',
+                                body: formData
+                            });
+                            
+                            const exchangeData = await exchangeRes.json();
+                            if (exchangeData.success) {
+                                window.location.href = '/settings?success=Bank account linked successfully via Plaid!';
+                            } else {
+                                alert('Failed to link bank account: ' + exchangeData.error);
+                                linkButton.disabled = false;
+                                linkButton.innerHTML = '🏦 Link a New Bank or Credit Card';
+                            }
+                        },
+                        onExit: (err, metadata) => {
+                            linkButton.disabled = false;
+                            linkButton.innerHTML = '🏦 Link a New Bank or Credit Card';
+                            if (err != null) {
+                                console.error('Plaid Link exited with error: ', err);
+                            }
+                        }
+                    });
+                    
+                    handler.open();
+                } catch (error) {
+                    console.error('Plaid connection failed: ', error);
+                    alert('Network error connecting to Plaid helper API.');
+                    linkButton.disabled = false;
+                    linkButton.innerHTML = '🏦 Link a New Bank or Credit Card';
+                }
+            });
+        }
+    </script>
 </body>
 </html>

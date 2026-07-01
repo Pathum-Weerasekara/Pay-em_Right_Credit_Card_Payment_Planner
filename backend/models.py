@@ -11,20 +11,21 @@ class SystemSettings(Base):
 class Account(Base):
     __tablename__ = "accounts"
     id = Column(Integer, primary_key=True, index=True)
-    ynab_account_id = Column(String, unique=True, index=True)
+    ynab_account_id = Column(String, unique=True, index=True)  # Used as generic provider account ID (YNAB or Plaid)
     name = Column(String)
     type = Column(String)  # checking, savings, creditCard, etc.
     balance = Column(Integer)  # in milliunits
     is_credit_card = Column(Boolean, default=False)
     is_cash = Column(Boolean, default=False)  # checking/savings accounts
     is_active = Column(Boolean, default=True)
+    source = Column(String, default="plaid")  # "ynab" or "plaid"
     last_synced_at = Column(DateTime, default=datetime.utcnow)
 
 class Transaction(Base):
     __tablename__ = "transactions"
     id = Column(Integer, primary_key=True, index=True)
-    ynab_transaction_id = Column(String, unique=True, index=True)
-    account_id = Column(String, index=True)  # YNAB account id
+    ynab_transaction_id = Column(String, unique=True, index=True)  # Generic provider transaction ID (YNAB or Plaid)
+    account_id = Column(String, index=True)  # Provider account id
     date = Column(String, index=True)  # YYYY-MM-DD
     amount = Column(Integer)  # in milliunits
     payee_name = Column(String, nullable=True)
@@ -35,6 +36,7 @@ class Transaction(Base):
     is_payment = Column(Boolean, default=False)
     is_income = Column(Boolean, default=False)
     is_cashback_or_credit = Column(Boolean, default=False)
+    source = Column(String, default="plaid")  # "ynab" or "plaid"
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class MonthlyCardSummary(Base):
@@ -77,6 +79,7 @@ class PayerSummary(Base):
     payer_name = Column(String, index=True)  # "Pathum", "Ramesha"
     starting_cash = Column(Integer, default=0)  # in milliunits (monthly inflow / budget)
     zelle_outflows = Column(Integer, default=0)  # in milliunits, auto-detected from YNAB Zelle txns
+    current_bank_balance = Column(Integer, default=0)  # in milliunits, manual input
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -90,4 +93,13 @@ class ManualOutflow(Base):
     amount = Column(Integer, default=0)  # in milliunits (positive value = outflow)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class PlaidItem(Base):
+    __tablename__ = "plaid_items"
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(String, unique=True, index=True)
+    access_token = Column(String, unique=True)
+    institution_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 

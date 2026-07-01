@@ -19,12 +19,12 @@
         <nav class="nav-links">
             <a href="/dashboard/{{ year }}/{{ month }}" class="btn btn-secondary">Dashboard</a>
             <a href="/settings" class="btn btn-secondary">Settings</a>
-            {% if token_configured %}
-            <form action="/sync/{{ year }}/{{ month }}" method="post" style="display:inline;">
-                <button type="submit" class="btn btn-primary">🔄 Sync YNAB</button>
+            {% if plaid_configured %}
+            <form action="/sync-plaid/{{ year }}/{{ month }}" method="post" style="display:inline;">
+                <button type="submit" class="btn btn-primary">🔄 Sync Plaid</button>
             </form>
             {% else %}
-            <a href="/settings" class="btn btn-primary">⚠️ Configure YNAB</a>
+            <a href="/settings" class="btn btn-primary">⚠️ Configure Plaid</a>
             {% endif %}
         </nav>
     </header>
@@ -119,11 +119,44 @@
 
                 <!-- Divider + Remaining -->
                 <div class="budget-divider"></div>
-                <div class="budget-row remaining-row">
+                <div class="budget-row remaining-row" style="margin-bottom: 1rem;">
                     <span class="brow-label" style="font-weight:700;">Remaining Balance</span>
                     <span class="brow-value remaining-val {% if p.remaining < 0 %}negative{% else %}positive{% endif %}"
                           id="remaining-{{ p.name.lower() }}">
                         {{ p.remaining | currency }}
+                    </span>
+                </div>
+
+                <!-- Bank Balance section -->
+                <div class="budget-row" style="margin-top: 1rem; border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 0.75rem;">
+                    <span class="brow-label">🏦 Current Bank Balance</span>
+                    <form action="/payer-bank-balance/{{ year }}/{{ month }}" method="post" class="inline-edit-form">
+                        <input type="hidden" name="payer_id" value="{{ p.id }}">
+                        <div class="inline-edit-wrap">
+                            <span class="currency-prefix">$</span>
+                            <input type="number" step="0.01" name="current_bank_balance"
+                                   value="{{ p.current_bank_balance | to_currency_raw }}"
+                                   class="inline-number-input payer-bank"
+                                   data-payer="{{ p.name.lower() }}"
+                                   id="bank-{{ p.name.lower() }}" required>
+                            <button type="submit" class="mini-save-btn">Save</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="budget-row deduct-row">
+                    <span class="brow-label">💳 Pending CC Payments</span>
+                    <span class="brow-value deduct payer-cc-pending" id="cc-pending-{{ p.name.lower() }}">
+                        − {{ p.cc_pending_planned | currency }}
+                    </span>
+                </div>
+
+                <div class="budget-divider"></div>
+                <div class="budget-row remaining-row">
+                    <span class="brow-label" style="font-weight:700;">Projected Ending Balance</span>
+                    <span class="brow-value remaining-val {% if p.projected_ending_balance < 0 %}negative{% else %}positive{% endif %}"
+                          id="projected-{{ p.name.lower() }}">
+                        {{ p.projected_ending_balance | currency }}
                     </span>
                 </div>
             </div>
@@ -143,7 +176,7 @@
                 </div>
 
                 <!-- Add form (hidden by default) -->
-                <form action="/manual-outflow/{{ year }}/{{ month }}" method="post"
+                <form action="/manual-outflow/add/{{ year }}/{{ month }}" method="post"
                       class="add-outflow-form" id="add-outflow-{{ p.name.lower() }}" style="display:none;">
                     <input type="hidden" name="payer" value="{{ p.name }}">
                     <div class="add-outflow-fields">
@@ -165,7 +198,7 @@
                         <div class="outflow-actions">
                             <button type="button" class="icon-btn edit-btn"
                                     onclick="toggleEditOutflow({{ mo.id }})">✏️</button>
-                            <form action="/manual-outflow/{{ mo.id }}/delete" method="post" style="display:inline;">
+                            <form action="/manual-outflow/delete/{{ mo.id }}" method="post" style="display:inline;">
                                 <input type="hidden" name="year" value="{{ year }}">
                                 <input type="hidden" name="month" value="{{ month }}">
                                 <button type="submit" class="icon-btn delete-btn"
@@ -173,7 +206,7 @@
                             </form>
                         </div>
                         <!-- Inline edit form -->
-                        <form action="/manual-outflow/{{ mo.id }}/edit" method="post"
+                        <form action="/manual-outflow/edit/{{ mo.id }}" method="post"
                               class="edit-outflow-form" id="edit-form-{{ mo.id }}" style="display:none;">
                             <input type="hidden" name="year" value="{{ year }}">
                             <input type="hidden" name="month" value="{{ month }}">
@@ -271,7 +304,8 @@
                 <tr class="cc-row"
                     id="row-{{ card.account_id }}"
                     data-account="{{ card.account_id }}"
-                    data-spending="{{ card.spending }}">
+                    data-spending="{{ card.spending }}"
+                    data-done="{{ 'true' if card.is_done else 'false' }}">
                     <td style="text-align:center;">
                         <input type="checkbox"
                                class="card-select-check"
@@ -350,7 +384,9 @@ const payerState = {
         inflow:  {{ p.starting_cash }},
         zelle:   {{ p.zelle_outflows }},
         manual:  {{ p.manual_total }},
+        bank:    {{ p.current_bank_balance }},
         ccTotal: 0,   // starts at 0 — user enters planned payments manually
+        ccPending: 0,
     },
     {% endfor %}
 };
@@ -378,7 +414,6 @@ function setAllCheckboxes(checked) {
     toggleMasterSelect(checked);
 }
 
-
 function refreshFilteredCards() {
     document.querySelectorAll('.cc-row').forEach(row => {
         const accountId = row.dataset.account;
@@ -398,7 +433,10 @@ function refreshFilteredCards() {
 // ─── Live balance rebuild ────────────────────────────────────────────────────
 function rebuildCCTotals() {
     // Reset per-payer CC totals
-    for (const pk in payerState) payerState[pk].ccTotal = 0;
+    for (const pk in payerState) {
+        payerState[pk].ccTotal = 0;
+        payerState[pk].ccPending = 0;
+    }
 
     let grandPlanned  = 0;
     let grandSpending = 0;
@@ -415,6 +453,7 @@ function rebuildCCTotals() {
 
         const planned   = inp  ? Math.round((parseFloat(inp.value) || 0) * 1000) : 0;
         const payerKey  = sel  ? sel.value.toLowerCase() : 'pathum';
+        const isDone    = row.dataset.done === 'true';
 
         grandPlanned  += planned;
         grandSpending += spending;
@@ -422,6 +461,9 @@ function rebuildCCTotals() {
 
         if (payerState[payerKey] !== undefined) {
             payerState[payerKey].ccTotal += planned;
+            if (!isDone) {
+                payerState[payerKey].ccPending += planned;
+            }
         }
 
         // Update this row's unpaid cell
@@ -460,6 +502,8 @@ function rebuildCCTotals() {
 
 function updatePayerDisplay(payerKey) {
     const remaining = calcRemaining(payerKey);
+    const s = payerState[payerKey];
+    const projectedEnding = s.bank - s.ccPending - s.manual;
 
     // Remaining balance
     const remEl = document.getElementById('remaining-' + payerKey);
@@ -470,7 +514,18 @@ function updatePayerDisplay(payerKey) {
 
     // CC total line in payer breakdown
     const ccEl = document.getElementById('cc-total-' + payerKey);
-    if (ccEl) ccEl.textContent = '− ' + fmtMu(payerState[payerKey].ccTotal);
+    if (ccEl) ccEl.textContent = '− ' + fmtMu(s.ccTotal);
+
+    // CC pending line in payer breakdown
+    const ccPendingEl = document.getElementById('cc-pending-' + payerKey);
+    if (ccPendingEl) ccPendingEl.textContent = '− ' + fmtMu(s.ccPending);
+
+    // Projected ending balance
+    const projEl = document.getElementById('projected-' + payerKey);
+    if (projEl) {
+        projEl.textContent = fmtMu(projectedEnding);
+        projEl.className   = 'brow-value remaining-val ' + (projectedEnding < 0 ? 'negative' : 'positive');
+    }
 
     // Summary card total remaining
     let totalRemaining = 0;
@@ -484,7 +539,6 @@ function updatePayerDisplay(payerKey) {
     // Progress bar + badge
     const cardEl = document.getElementById('payer-card-' + payerKey);
     if (cardEl) {
-        const s      = payerState[payerKey];
         const spent  = s.zelle + s.manual + s.ccTotal;
         const usedPct = s.inflow > 0 ? Math.round((spent / s.inflow) * 100) : 0;
 

@@ -30,6 +30,18 @@ migrations = [
     )""",
     "CREATE INDEX IF NOT EXISTS ix_manual_outflows_month ON manual_outflows (month)",
     "CREATE INDEX IF NOT EXISTS ix_manual_outflows_payer ON manual_outflows (payer)",
+    # Plaid integration migrations
+    "ALTER TABLE accounts ADD COLUMN source VARCHAR DEFAULT 'plaid'",
+    "ALTER TABLE transactions ADD COLUMN source VARCHAR DEFAULT 'plaid'",
+    "ALTER TABLE payer_summaries ADD COLUMN current_bank_balance INTEGER DEFAULT 0",
+    """CREATE TABLE IF NOT EXISTS plaid_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id VARCHAR UNIQUE NOT NULL,
+        access_token VARCHAR UNIQUE NOT NULL,
+        institution_name VARCHAR,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_plaid_items_item_id ON plaid_items (item_id)",
 ]
 
 with engine.connect() as conn:
