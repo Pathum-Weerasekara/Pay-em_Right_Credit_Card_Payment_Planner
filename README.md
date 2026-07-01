@@ -1,12 +1,14 @@
-# YNAB Credit Card Payment Planner & Tracker
+# Pay'em Right - CC Payment Planner & Tracker (Connected via Plaid)
 
-A locally hosted web application to plan, monitor, and manage your credit card payments using YNAB data. This tracker caches monthly transactions, credit card category available balances, and cash inflow summaries locally, and features custom payer budgeting limits and carry-forward debt calculation support.
+A locally hosted web application to plan, monitor, and manage your credit card payments and bank balances. This tracker caches monthly transactions, checking account balances, and credit card balances locally, featuring custom payer bank account tracking, manual bank overrides, and dynamic projected ending balance calculations.
+
+---
 
 ## Core Features
 
-- **Payer Allocations**: Manage individual available cash budgets for multiple payers (e.g. Pathum and Ramesha) and check remaining balances after planned card payments.
-- **Carry Forward Calculations**: Track monthly credit card spending vs. planned payments to compute carried-forward balances.
-- **YNAB Integration**: Safely retrieve monthly accounts, transactions, and categories using YNAB's official API (strictly read-only).
+- **Payer Allocations**: Manage individual available cash budgets and current bank account balances for multiple payers (e.g. Pathum and Ramesha).
+- **Projected Ending Balances**: Automatically compute expected bank balances at the end of the month: `Current Bank Balance - Pending CC Payments - Manual Outflows`.
+- **Plaid Integration**: Safely retrieve monthly accounts, real-time balances, and transactions using Plaid's secure token-exchange API.
 - **Interactive Details**: Drill down into individual card transactions (grouped by purchases, payments, and credits/refunds).
 - **Responsive Theme**: Sleek, glassmorphic dark theme built for premium visual quality.
 
@@ -26,8 +28,8 @@ CC Payment Planner and Tracker/
 │   ├── database.py
 │   ├── models.py
 │   ├── calculations.py
-│   ├── ynab_client.py
-│   └── sync_service.py
+│   ├── plaid_client.py
+│   └── sync_service_plaid.py
 ├── frontend/
 │   ├── static/
 │   │   └── style.css
@@ -49,20 +51,24 @@ Open your terminal (PowerShell, Command Prompt, or bash) in the project director
 pip install -r requirements.txt
 ```
 
-### Step 3: Get Your YNAB Personal Access Token
-1. Log in to your **YNAB account** on your browser.
-2. Go to your **Account Settings** (click your profile in the bottom-left corner and select **Settings**).
-3. Scroll down and click **Manage Developer Settings** (or navigate directly to [app.ynab.com/settings/developer](https://app.ynab.com/settings/developer)).
-4. Under **Personal Access Tokens**, click **New Token**.
-5. Re-enter your password and add a descriptive label (e.g. *Local CC Planner*).
-6. Copy the generated token string immediately.
+### Step 3: Get Your Plaid API Keys
+1. Sign up on the [Plaid Dashboard](https://dashboard.plaid.com/).
+2. Navigate to your Account Settings to find your API credentials (`client_id` and `secret`).
+3. By default, your account starts with access to Plaid's free **Sandbox** mode. To connect real accounts for personal use, click "Request Access" to enable the **Development** tier (supporting up to 10 real bank connections).
 
 ### Step 4: Configure the App
-Create a file named `.env` in the root folder, and insert your token:
+Create a file named `.env` in the root folder, and insert your keys:
 ```env
-YNAB_API_TOKEN=your_copied_ynab_token_here
+PLAID_CLIENT_ID=your_plaid_client_id
+PLAID_SECRET=your_plaid_secret
+PLAID_ENV=sandbox # use 'sandbox' for testing, 'development' for real bank accounts
 ```
-*(Alternatively, you can paste the token directly inside the app's **Settings** page later).*
+
+### Step 5: Initialize the Database
+Run the migration script to configure database schemas:
+```bash
+python migrate.py
+```
 
 ---
 
@@ -74,11 +80,12 @@ YNAB_API_TOKEN=your_copied_ynab_token_here
    ```
 2. Open your browser and navigate to:
    [http://127.0.0.1:8000](http://127.0.0.1:8000)
+3. Go to **Settings** to link your bank accounts or credit cards using the secure Plaid Link widget.
 
 ---
 
 ## Running the Tests
 To run the automated math and calculation tests:
 ```bash
-pytest
+python -m pytest
 ```
