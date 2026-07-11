@@ -20,3 +20,6 @@
 - **Paid Checkbox Column:** Re-added the Paid checkboxes along with the `onPaidChange(checkbox)` JS handler to update the budgets live.
 - **Pay From Dropdown Options:** Restored split options (`Pathum Manual`, `Pathum Auto`, `Ramesha Manual`, `Ramesha Auto`).
 - **Payer Select Colors:** Restored blue background styling for Pathum and pink background styling for Ramesha on load and select change.
+
+## 5. UI Layout Adjustments
+- **Dropdown Padding:** Increased right-side padding on `.plan-payer-select` select boxes to prevent the dropdown indicator arrow from overlapping option labels (such as "Ramesha Manual").
