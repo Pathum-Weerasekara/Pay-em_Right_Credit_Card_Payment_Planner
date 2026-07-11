@@ -437,16 +437,17 @@
                     </td>
                     <td style="text-align:right;">
                         <div class="inline-plan-wrap">
-                            <span class="currency-prefix-sm">$</span>
-                            <input type="number" step="0.01" min="0"
+                            <input type="text"
                                    name="planned_{{ card.account_id }}"
-                                   value="0"
-                                   placeholder="0.00"
+                                   value="{{ card.planned_payment | currency if card.planned_payment else '$0.00' }}"
+                                   placeholder="$0.00"
                                    class="plan-input"
+                                   style="text-align: right; width: 100%; font-family: monospace; font-weight: 700; background: transparent; border: none; padding: 0.35rem 0.6rem; color: #ffffff; outline: none;"
                                    data-account="{{ card.account_id }}"
                                    data-spending="{{ card.spending }}"
                                    data-payer-target="{{ card.from_account | lower }}"
-                                   oninput="onPlanChange(this)">
+                                   onfocus="cleanAccountingInput(this)"
+                                   onblur="formatAccountingInput(this); onPlanChange(this)">
                         </div>
                     </td>
                     <td>
@@ -656,8 +657,9 @@ function rebuildCCTotals() {
         const inp       = row.querySelector('.plan-input');
         const sel       = row.querySelector('.plan-payer-select');
 
-        const planned   = inp  ? Math.round((parseFloat(inp.value) || 0) * 1000) : 0;
-        const payerKey  = sel  ? sel.value.toLowerCase() : 'pathum';
+        const cleanVal  = inp ? inp.value.replace(/[^0-9.]/g, '') : '0';
+        const planned   = Math.round((parseFloat(cleanVal) || 0) * 1000);
+        const payerKey  = sel  ? sel.value.split(' ')[0].toLowerCase() : 'pathum';
         const isDone    = row.dataset.done === 'true';
 
         grandPlanned  += planned;
@@ -779,6 +781,23 @@ function onPaidChange(checkbox) {
     }
     rebuildCCTotals();
 }
+function formatAccountingInput(input) {
+    let val = input.value.replace(/[^0-9.]/g, '');
+    if (val === '') {
+        input.value = '$0.00';
+        return;
+    }
+    let num = parseFloat(val) || 0;
+    input.value = '$' + num.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+function cleanAccountingInput(input) {
+    let val = input.value.replace(/[^0-9.]/g, '');
+    if (parseFloat(val) === 0) {
+        input.value = '';
+    } else {
+        input.value = val;
+    }
+}
 
 // ─── Manual outflow UI ───────────────────────────────────────────────────────
 function toggleAddOutflow(payerKey) {
@@ -876,6 +895,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.plan-payer-select').forEach(select => {
         updatePayerSelectColor(select);
     });
+    rebuildCCTotals();
 });
 </script>
 </body>

@@ -24,3 +24,4 @@
 ## 5. UI Layout Adjustments
 - **Dropdown Padding:** Increased right-side padding inline in the head of `dashboard.html` to `1.85rem` on `.plan-payer-select` select boxes to prevent the browser dropdown indicator arrow from overlapping the option labels.
 - **Column Min-Width:** Restored the `min-width: 165px;` style on the **Pay From** table header `<th>` cell in `dashboard.html` to ensure the select elements have enough horizontal width to display option names fully (preventing truncation to "Ramesha Manu").
+- **Planned Payment Input Formatting:** Restored the text input type for the **Planned Payment** fields along with the `cleanAccountingInput` and `formatAccountingInput` JavaScript functions. This formats values to standard currency (like `$100.00`) on focus/blur, and handles parsing and budget updates correctly.
