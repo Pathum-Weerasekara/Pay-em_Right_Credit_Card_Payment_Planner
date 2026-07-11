@@ -22,4 +22,4 @@
 - **Payer Select Colors:** Restored blue background styling for Pathum and pink background styling for Ramesha on load and select change.
 
 ## 5. UI Layout Adjustments
-- **Dropdown Padding:** Increased right-side padding on `.plan-payer-select` select boxes to prevent the dropdown indicator arrow from overlapping option labels (such as "Ramesha Manual").
+- **Dropdown Padding:** Increased right-side padding inline in the head of `dashboard.html` to `1.85rem` on `.plan-payer-select` select boxes to prevent the browser dropdown indicator arrow from overlapping the option labels (such as "Ramesha Manual").
