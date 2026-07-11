@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+load_dotenv() # Load env keys from .env file
+
 from datetime import datetime
 from fastapi import FastAPI, Depends, Request, Form, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -7,26 +10,58 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from backend.database import engine, Base, get_db
 from backend.models import Account, Transaction, MonthlyCardSummary, PaymentPlan, PayerSummary, SystemSettings, ManualOutflow, PlaidItem
-from backend.sync_service import sync_data_from_ynab, get_days_in_month
-from backend.sync_service_plaid import sync_data_from_plaid
-from backend.ynab_client import YNABClient
+from backend.sync_service_plaid import sync_data_from_plaid, get_days_in_month
 from backend.plaid_client import PlaidClientWrapper
 from backend.calculations import to_currency, to_milliunits, determine_status
 
 # Initialize DB tables
+from sqlalchemy import text
+with engine.connect() as conn:
+    try:
+        conn.execute(text("ALTER TABLE accounts ADD COLUMN custom_name VARCHAR"))
+        conn.commit()
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE accounts ADD COLUMN plaid_item_id VARCHAR"))
+        conn.commit()
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE payment_plans ADD COLUMN is_active BOOLEAN DEFAULT 1"))
+        conn.commit()
+    except Exception:
+        pass
 Base.metadata.create_all(bind=engine)
 
 def seed_initial_data():
     from backend.database import SessionLocal
     db = SessionLocal()
     try:
-        # Only seed if there are zero payer summaries for 2026-06 AND no real YNAB accounts exist
-        has_real_ynab_accounts = db.query(Account).filter(
-            ~Account.ynab_account_id.like("ynab_%")
+        # Backfill plaid_item_id mapping for any pre-existing accounts in DB
+        items = db.query(PlaidItem).all()
+        for item in items:
+            try:
+                from backend.plaid_client import PlaidClientWrapper
+                client = PlaidClientWrapper()
+                acc_resp = client.get_accounts_and_balances(item.access_token)
+                accs = acc_resp.get("accounts", [])
+                for a in accs:
+                    db_acc = db.query(Account).filter(Account.ynab_account_id == a["account_id"]).first()
+                    if db_acc and not db_acc.plaid_item_id:
+                        db_acc.plaid_item_id = item.item_id
+                db.commit()
+            except Exception as e:
+                print(f"Error backfilling account associations: {e}")
+                pass
+                
+        # Only seed if there are zero payer summaries for 2026-06 AND no real Plaid accounts exist
+        has_real_plaid_accounts = db.query(Account).filter(
+            Account.source == "plaid"
         ).count() > 0
         
-        if has_real_ynab_accounts:
-            # Real accounts already synced from YNAB, skip seeding
+        if has_real_plaid_accounts:
+            # Real accounts already synced from Plaid, skip seeding
             db.close()
             return
         
@@ -104,8 +139,10 @@ templates.env.filters["to_currency_raw"] = to_currency
 
 @app.get("/", response_class=HTMLResponse)
 def root():
-    # User specified starting date is 01 June 2026
-    return RedirectResponse(url="/dashboard/2026/06", status_code=status.HTTP_303_SEE_OTHER)
+    now = datetime.now()
+    year_str = now.strftime("%Y")
+    month_str = now.strftime("%m")
+    return RedirectResponse(url=f"/dashboard/{year_str}/{month_str}", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/dashboard/{year}/{month}", response_class=HTMLResponse)
 def read_dashboard(year: str, month: str, request: Request, db: Session = Depends(get_db)):
@@ -143,17 +180,71 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
             MonthlyCardSummary.ynab_account_id == card.ynab_account_id
         ).first()
         
+        if not summary and card.source == "manual":
+            summary = MonthlyCardSummary(
+                month=month_str,
+                ynab_account_id=card.ynab_account_id,
+                card_name=card.name,
+                starting_balance=0,
+                ending_balance=card.balance,
+                cc_spending=0,
+                payments_made=0,
+                refunds_or_credits=0,
+                available_for_payment=0,
+                synced_at=datetime.utcnow()
+            )
+            db.add(summary)
+            db.commit()
+            db.refresh(summary)
+        
         plan = db.query(PaymentPlan).filter(
             PaymentPlan.month == month_str,
             PaymentPlan.ynab_account_id == card.ynab_account_id
         ).first()
+        
+        if not plan:
+            try:
+                dt_curr = datetime.strptime(month_str, "%Y-%m")
+                if dt_curr.month == 1:
+                    prev_month_str = f"{dt_curr.year - 1}-12"
+                else:
+                    prev_month_str = f"{dt_curr.year}-{str(dt_curr.month - 1).zfill(2)}"
+                
+                prev_plan = db.query(PaymentPlan).filter(
+                    PaymentPlan.month == prev_month_str,
+                    PaymentPlan.ynab_account_id == card.ynab_account_id
+                ).first()
+                
+                if prev_plan:
+                    plan = PaymentPlan(
+                        ynab_account_id=card.ynab_account_id,
+                        month=month_str,
+                        planned_amount=0,
+                        from_account=prev_plan.from_account,
+                        payer=prev_plan.payer,
+                        payment_type=prev_plan.payment_type,
+                        due_date=prev_plan.due_date,
+                        min_payment=prev_plan.min_payment,
+                        notes=prev_plan.notes,
+                        is_done=False
+                    )
+                    db.add(plan)
+                    db.commit()
+                    db.refresh(plan)
+            except Exception as e:
+                print(f"Error carrying forward payment plan: {e}")
+                pass
         
         spending = summary.cc_spending if summary else 0
         payments_made = summary.payments_made if summary else 0
         opening_override = summary.opening_balance_override if summary else None
         
         planned_amt = plan.planned_amount if plan else 0
-        from_account = plan.from_account if plan else "Pathum"
+        if plan:
+            ptype_str = "Auto" if plan.payment_type == "Auto" else "Manual"
+            from_account = f"{plan.payer} {ptype_str}"
+        else:
+            from_account = "Pathum Manual"
         payer = plan.payer if plan else "Pathum"
         is_done = plan.is_done if plan else False
         unpaid_override = plan.unpaid_balance_override if plan else None
@@ -179,7 +270,7 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
         
         card_list.append({
             "account_id": card.ynab_account_id,
-            "name": card.name,
+            "name": card.display_name,
             "balance": card.balance,
             "spending": spending,
             "payments_made": payments_made,
@@ -189,6 +280,8 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
             "unpaid_balance": unpaid_balance,
             "status": card_status,
             "is_done": is_done,
+            "notes": plan.notes if plan else "",
+            "is_active": plan.is_active if plan else False,
         })
     
     # Sort card_list: cards with spending first, then by name
@@ -198,11 +291,11 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
     payers = db.query(PayerSummary).filter(PayerSummary.month == month_str).all()
     payer_data = []
     for p in payers:
-        # Sum planned payments assigned to this payer
-        p_planned_total = sum(c["planned_payment"] for c in card_list if c["from_account"] == p.payer_name)
+        # Sum planned payments assigned to this payer (e.g. starts with "Pathum" or "Ramesha")
+        p_planned_total = sum(c["planned_payment"] for c in card_list if c["from_account"] and c["from_account"].startswith(p.payer_name))
         
         # Sum pending planned payments (where is_done is False)
-        p_pending_planned = sum(c["planned_payment"] for c in card_list if c["from_account"] == p.payer_name and not c["is_done"])
+        p_pending_planned = sum(c["planned_payment"] for c in card_list if c["from_account"] and c["from_account"].startswith(p.payer_name) and not c["is_done"])
         
         # Get manual outflows for this payer this month
         manual_outflows = db.query(ManualOutflow).filter(
@@ -242,7 +335,6 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
     next_year, next_month = get_prev_next_month(int(year), int(month), 1)
     
     plaid_configured = db.query(PlaidItem).count() > 0
-    token_configured = bool(os.getenv("YNAB_API_TOKEN"))
     success_msg = request.query_params.get("success")
     error_msg = request.query_params.get("error")
     
@@ -267,7 +359,6 @@ def read_dashboard(year: str, month: str, request: Request, db: Session = Depend
             "payer_data": payer_data,
             "settings": settings,
             "plaid_configured": plaid_configured,
-            "token_configured": token_configured,
             "success_msg": success_msg,
             "error_msg": error_msg
         }
@@ -319,10 +410,11 @@ async def save_card_plan_inline(year: str, month: str, request: Request, db: Ses
     for account_id in accounts_seen:
         try:
             planned_raw = form.get(f"planned_{account_id}", "0") or "0"
-            planned_amt = to_milliunits(float(planned_raw))
+            clean_planned_raw = planned_raw.replace("$", "").replace(",", "").strip()
+            planned_amt = to_milliunits(float(clean_planned_raw))
         except (ValueError, TypeError):
             planned_amt = 0
-        from_account = form.get(f"from_{account_id}", "Pathum")
+        from_account = form.get(f"from_{account_id}", "Pathum Manual")
         
         plan = db.query(PaymentPlan).filter(
             PaymentPlan.month == month_str,
@@ -335,7 +427,20 @@ async def save_card_plan_inline(year: str, month: str, request: Request, db: Ses
         
         plan.planned_amount = planned_amt
         plan.from_account = from_account
-        plan.payer = from_account  # keep payer in sync
+        parts = from_account.split()
+        plan.payer = parts[0] if parts else "Pathum"
+        plan.payment_type = "Auto" if len(parts) > 1 and parts[1] == "Auto" else "Man"
+        
+        # Save Paid checkbox status
+        plan.is_done = f"done_{account_id}" in form
+        
+        # Save Active/Selected checkbox status
+        plan.is_active = f"active_{account_id}" in form
+        
+        # Save inline comment
+        notes_val = form.get(f"notes_{account_id}", "").strip()
+        plan.notes = notes_val if notes_val else None
+        
         updated += 1
     
     db.commit()
@@ -558,11 +663,43 @@ async def update_card_plan(
     plan.planned_payment_date = planned_payment_date or None
     plan.payer = payer
     plan.payment_type = payment_type
+    plan.from_account = f"{payer} {'Auto' if payment_type == 'Auto' else 'Manual'}"
     plan.is_done = is_done
     plan.due_date = due_date or None
     plan.min_payment = to_milliunits(min_payment)
     plan.notes = notes
     
+    # If card is manually managed, update its balance and monthly summary details
+    card = db.query(Account).filter(Account.ynab_account_id == account_id).first()
+    if card and card.source == "manual":
+        try:
+            card_balance = float(form.get("card_balance", 0) or 0)
+            cc_spending = float(form.get("cc_spending", 0) or 0)
+            payments_made = float(form.get("payments_made", 0) or 0)
+            refunds_or_credits = float(form.get("refunds_or_credits", 0) or 0)
+            
+            card.balance = -to_milliunits(card_balance)
+            
+            summary = db.query(MonthlyCardSummary).filter(
+                MonthlyCardSummary.month == month_str,
+                MonthlyCardSummary.ynab_account_id == account_id
+            ).first()
+            
+            if not summary:
+                summary = MonthlyCardSummary(
+                    month=month_str,
+                    ynab_account_id=account_id,
+                    card_name=card.name
+                )
+                db.add(summary)
+                
+            summary.ending_balance = card.balance
+            summary.cc_spending = to_milliunits(cc_spending)
+            summary.payments_made = to_milliunits(payments_made)
+            summary.refunds_or_credits = to_milliunits(refunds_or_credits)
+        except Exception as e:
+            print(f"Error updating manual card details: {e}")
+            
     db.commit()
     
     return RedirectResponse(
@@ -570,26 +707,96 @@ async def update_card_plan(
         status_code=status.HTTP_303_SEE_OTHER
     )
 
+@app.post("/dashboard/manual-card/add/{year}/{month}", response_class=RedirectResponse)
+async def add_manual_card(
+    year: str,
+    month: str,
+    name: str = Form(...),
+    balance: float = Form(0.0),
+    db: Session = Depends(get_db)
+):
+    import uuid
+    month_str = f"{year}-{month.zfill(2)}"
+    
+    # Generate unique ID for the manual account
+    ynab_acc_id = f"manual_cc_{uuid.uuid4().hex[:12]}"
+    
+    # Balance in database is stored as negative for credit card debt
+    db_balance = -to_milliunits(balance)
+    
+    # Create the manual Account record
+    new_card = Account(
+        ynab_account_id=ynab_acc_id,
+        name=name.strip(),
+        type="creditCard",
+        balance=db_balance,
+        is_credit_card=True,
+        is_cash=False,
+        is_active=True,
+        source="manual"
+    )
+    db.add(new_card)
+    db.commit()
+    db.refresh(new_card)
+    
+    # Auto-create summary for the current month
+    summary = MonthlyCardSummary(
+        month=month_str,
+        ynab_account_id=ynab_acc_id,
+        card_name=new_card.name,
+        starting_balance=0,
+        ending_balance=db_balance,
+        cc_spending=to_milliunits(balance),
+        payments_made=0,
+        refunds_or_credits=0,
+        available_for_payment=0,
+        synced_at=datetime.utcnow()
+    )
+    db.add(summary)
+    
+    # Auto-create the PaymentPlan so it displays on the active list right away
+    plan = PaymentPlan(
+        ynab_account_id=ynab_acc_id,
+        month=month_str,
+        planned_amount=to_milliunits(balance),
+        payer="Pathum",
+        payment_type="Man",
+        is_done=False,
+        is_active=True
+    )
+    db.add(plan)
+    db.commit()
+    
+    return RedirectResponse(
+        url=f"/dashboard/{year}/{month}?success=Manual card added successfully",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
+@app.post("/card/{account_id}/{year}/{month}/delete", response_class=RedirectResponse)
+def delete_manual_card(account_id: str, year: str, month: str, db: Session = Depends(get_db)):
+    card = db.query(Account).filter(Account.ynab_account_id == account_id, Account.source == "manual").first()
+    if card:
+        # Delete summary, plan, transactions, and account
+        db.query(Account).filter(Account.ynab_account_id == account_id).delete(synchronize_session=False)
+        db.query(MonthlyCardSummary).filter(MonthlyCardSummary.ynab_account_id == account_id).delete(synchronize_session=False)
+        db.query(PaymentPlan).filter(PaymentPlan.ynab_account_id == account_id).delete(synchronize_session=False)
+        db.query(Transaction).filter(Transaction.account_id == account_id).delete(synchronize_session=False)
+        db.commit()
+        return RedirectResponse(
+            url=f"/dashboard/{year}/{month}?success=Manual card deleted successfully",
+            status_code=status.HTTP_303_SEE_OTHER
+        )
+    return RedirectResponse(
+        url=f"/dashboard/{year}/{month}?error=Manual card not found",
+        status_code=status.HTTP_303_SEE_OTHER
+    )
+
 @app.get("/settings", response_class=HTMLResponse)
 def read_settings(request: Request, db: Session = Depends(get_db)):
-    # Read settings and active budget list
     sys_settings = db.query(SystemSettings).first()
     accounts = db.query(Account).order_by(Account.type, Account.name).all()
     plaid_items = db.query(PlaidItem).all()
     
-    token = os.getenv("YNAB_API_TOKEN")
-    budgets = []
-    token_valid = False
-    
-    if token:
-        try:
-            client = YNABClient(token)
-            token_valid = client.verify_token()
-            if token_valid:
-                budgets = client.get_budgets()
-        except Exception:
-            token_valid = False
-            
     success_msg = request.query_params.get("success")
     error_msg = request.query_params.get("error")
     
@@ -599,9 +806,6 @@ def read_settings(request: Request, db: Session = Depends(get_db)):
         context={
             "sys_settings": sys_settings,
             "accounts": accounts,
-            "budgets": budgets,
-            "token_valid": token_valid,
-            "token": token,
             "plaid_items": plaid_items,
             "success_msg": success_msg,
             "error_msg": error_msg
@@ -610,129 +814,8 @@ def read_settings(request: Request, db: Session = Depends(get_db)):
 
 
 @app.post("/settings", response_class=RedirectResponse)
-def save_settings(
-    ynab_token: str = Form(None),
-    budget_id: str = Form(None),
-    db: Session = Depends(get_db)
-):
-    # Save token in .env file
-    if ynab_token is not None:
-        # Read existing .env contents
-        env_lines = []
-        token_found = False
-        if os.path.exists(".env"):
-            with open(".env", "r") as f:
-                env_lines = f.readlines()
-                
-            for i, line in enumerate(env_lines):
-                if line.startswith("YNAB_API_TOKEN="):
-                    env_lines[i] = f"YNAB_API_TOKEN={ynab_token.strip()}\n"
-                    token_found = True
-                    break
-        if not token_found:
-            env_lines.append(f"YNAB_API_TOKEN={ynab_token.strip()}\n")
-            
-        with open(".env", "w") as f:
-            f.writelines(env_lines)
-            
-        # Also refresh environment variable
-        os.environ["YNAB_API_TOKEN"] = ynab_token.strip()
-        
-    # Save active budget
-    sys_settings = db.query(SystemSettings).first()
-    if not sys_settings:
-        sys_settings = SystemSettings()
-        db.add(sys_settings)
-    if budget_id:
-        sys_settings.ynab_budget_id = budget_id
-    db.commit()
-    
+def save_settings():
     return RedirectResponse(url="/settings?success=Settings saved", status_code=status.HTTP_303_SEE_OTHER)
-
-@app.post("/settings/accounts", response_class=RedirectResponse)
-def save_accounts_settings(request: Request, db: Session = Depends(get_db)):
-    # Parse form data to determine which accounts are checked
-    # Since checkboxes only submit if checked, we fetch all active accounts from db and check presence in form
-    accounts = db.query(Account).all()
-    
-    async def parse_form():
-        form_data = await request.form()
-        return form_data
-        
-    # FastAPI path methods can't easily wait inside sync methods without custom tricks,
-    # but we can resolve the form data by accessing it synchronously. Actually, FastAPI allows 
-    # declaring form parameters or using the Request object. To make it extremely safe:
-    return RedirectResponse(url="/settings?error=Method not supported", status_code=status.HTTP_303_SEE_OTHER)
-
-@app.post("/settings/accounts-sync", response_class=RedirectResponse)
-async def update_accounts_sync(request: Request, db: Session = Depends(get_db)):
-    form_data = await request.form()
-    accounts = db.query(Account).all()
-    
-    for acc in accounts:
-        # Check cash checkbox
-        cash_key = f"cash_{acc.ynab_account_id}"
-        acc.is_cash = cash_key in form_data
-        
-        # Check active checkbox
-        active_key = f"active_{acc.ynab_account_id}"
-        acc.is_active = active_key in form_data
-        
-    db.commit()
-    return RedirectResponse(url="/settings?success=Account roles updated", status_code=status.HTTP_303_SEE_OTHER)
-
-@app.post("/accounts/deactivate-seeds", response_class=RedirectResponse)
-async def deactivate_seed_accounts(db: Session = Depends(get_db)):
-    """Deactivate placeholder seeded accounts that have fake ynab_ prefixed IDs"""
-    seeded = db.query(Account).filter(Account.ynab_account_id.like("ynab_%")).all()
-    for acc in seeded:
-        acc.is_active = False
-    db.commit()
-    return RedirectResponse(url="/settings?success=Placeholder accounts deactivated", status_code=status.HTTP_303_SEE_OTHER)
-
-@app.post("/sync/{year}/{month}", response_class=RedirectResponse)
-def trigger_sync(year: str, month: str, db: Session = Depends(get_db)):
-    sys_settings = db.query(SystemSettings).first()
-    budget_id = sys_settings.ynab_budget_id if sys_settings else None
-    
-    # If no budget id set, try to default to first budget from API
-    token = os.getenv("YNAB_API_TOKEN")
-    if not token:
-        return RedirectResponse(
-            url=f"/dashboard/{year}/{month}?error=YNAB API Token is not configured. Go to Settings.", 
-            status_code=status.HTTP_303_SEE_OTHER
-        )
-        
-    if not budget_id:
-        try:
-            client = YNABClient(token)
-            budgets = client.get_budgets()
-            if budgets:
-                budget_id = budgets[0]["id"]
-            else:
-                return RedirectResponse(
-                    url=f"/dashboard/{year}/{month}?error=No YNAB budgets found.", 
-                    status_code=status.HTTP_303_SEE_OTHER
-                )
-        except Exception as e:
-            return RedirectResponse(
-                url=f"/dashboard/{year}/{month}?error=Failed to fetch budget list: {str(e)}", 
-                status_code=status.HTTP_303_SEE_OTHER
-            )
-            
-    try:
-        sync_data_from_ynab(db, budget_id, year, month)
-        return RedirectResponse(
-            url=f"/dashboard/{year}/{month}?success=YNAB data synced successfully", 
-            status_code=status.HTTP_303_SEE_OTHER
-        )
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return RedirectResponse(
-            url=f"/dashboard/{year}/{month}?error=Sync failed: {str(e)}", 
-            status_code=status.HTTP_303_SEE_OTHER
-        )
 
 @app.post("/api/create_link_token")
 def create_link_token():
@@ -767,9 +850,89 @@ async def exchange_public_token(request: Request, db: Session = Depends(get_db))
             )
             db.add(item)
             db.commit()
+            db.refresh(item)
+        else:
+            item = existing
+
+        # Parse custom display names from frontend modal
+        import json
+        custom_names_str = form.get("accounts_custom_names", "{}")
+        custom_names = {}
+        try:
+            custom_names = json.loads(custom_names_str)
+        except Exception:
+            pass
+
+        # Fetch actual accounts from Plaid and save them immediately with custom names
+        accounts_resp = client.get_accounts_and_balances(access_token)
+        plaid_accounts = accounts_resp.get("accounts", [])
+        
+        for acc_data in plaid_accounts:
+            # Sync checking, savings, and credit card accounts
+            is_cc = acc_data.get("type") == "credit" or acc_data.get("subtype") == "credit card"
+            acc_id = acc_data["account_id"]
+            
+            db_acc = db.query(Account).filter(Account.ynab_account_id == acc_id).first()
+            if not db_acc:
+                db_acc = Account(ynab_account_id=acc_id)
+                db.add(db_acc)
+                
+            db_acc.name = acc_data["name"]
+            db_acc.type = acc_data["subtype"] or acc_data["type"]
+            db_acc.is_credit_card = is_cc
+            db_acc.is_cash = not is_cc
+            
+            # Multiply by -1 for credit cards because Plaid returns positive values for credit card balances (debt)
+            bal_multiplier = -1 if is_cc else 1
+            db_acc.balance = int(round(acc_data["balances"].get("current", 0.0) * bal_multiplier * 1000))
+            
+            db_acc.is_active = True
+            db_acc.source = "plaid"
+            
+            # Apply user-customized display name
+            if acc_id in custom_names:
+                db_acc.custom_name = custom_names[acc_id]
+                
+        db.commit()
         return {"success": True}
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         return {"error": str(e)}
+
+@app.post("/settings/plaid-item/delete/{item_id}", response_class=RedirectResponse)
+def delete_plaid_item(item_id: str, db: Session = Depends(get_db)):
+    item = db.query(PlaidItem).filter(PlaidItem.item_id == item_id).first()
+    if item:
+        try:
+            # Fetch accounts associated with this Plaid item to clean them up
+            client = PlaidClientWrapper()
+            accounts_resp = client.get_accounts_and_balances(item.access_token)
+            accounts = accounts_resp.get("accounts", [])
+            acc_ids = [acc["account_id"] for acc in accounts]
+            
+            # Delete accounts and their transactions/summaries
+            if acc_ids:
+                db.query(Account).filter(Account.ynab_account_id.in_(acc_ids)).delete(synchronize_session=False)
+                db.query(Transaction).filter(Transaction.account_id.in_(acc_ids)).delete(synchronize_session=False)
+                db.query(MonthlyCardSummary).filter(MonthlyCardSummary.ynab_account_id.in_(acc_ids)).delete(synchronize_session=False)
+                db.query(PaymentPlan).filter(PaymentPlan.ynab_account_id.in_(acc_ids)).delete(synchronize_session=False)
+        except Exception as e:
+            print(f"Error fetching accounts from Plaid during unlink: {e}")
+            pass
+            
+        db.delete(item)
+        db.commit()
+        return RedirectResponse(url="/settings?success=Institution unlinked successfully", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/settings?error=Institution not found", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/settings/account/rename/{account_id}", response_class=RedirectResponse)
+def rename_settings_account(account_id: str, new_name: str = Form(...), db: Session = Depends(get_db)):
+    acc = db.query(Account).filter(Account.ynab_account_id == account_id).first()
+    if acc:
+        acc.custom_name = new_name.strip() if new_name.strip() else None
+        db.commit()
+    return RedirectResponse(url="/settings?success=Card renamed successfully", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post("/sync-plaid/{year}/{month}", response_class=RedirectResponse)
 def trigger_plaid_sync(year: str, month: str, db: Session = Depends(get_db)):

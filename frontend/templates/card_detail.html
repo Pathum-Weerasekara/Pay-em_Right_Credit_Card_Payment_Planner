@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ card.name }} Details - Pay'em Right</title>
+    <title>{{ card.display_name }} Details - Pay'em Right</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
         <header>
             <div class="brand">
                 <span class="logo-icon">💳</span>
-                <h1>{{ card.name }} Details</h1>
+                <h1>{{ card.display_name }} Details</h1>
             </div>
             <nav class="nav-links">
                 <a href="/dashboard/{{ year }}/{{ month }}" class="btn btn-secondary">← Back to Dashboard</a>
@@ -44,15 +44,12 @@
                         <div style="font-size: 1.5rem; font-weight: 700; color: var(--text-primary);">{{ (summary.cc_spending if summary else 0) | currency }}</div>
                     </div>
                     <div>
-                        <span style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">YNAB Available</span>
-                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--accent-success);">{{ (summary.available_for_payment if summary else 0) | currency }}</div>
-                    </div>
-                    <div>
                         <span style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Carry Forward</span>
                         <div style="font-size: 1.5rem; font-weight: 700; {% if carry_forward > 0 %}color: var(--accent-warning);{% else %}color: var(--text-muted);{% endif %}">{{ carry_forward | currency }}</div>
                     </div>
                 </div>
 
+                {% if card.source != 'manual' %}
                 <!-- Purchases -->
                 <div class="card">
                     <h3 style="font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">Purchases this Month ({{ purchases|length }})</h3>
@@ -138,6 +135,18 @@
                         </table>
                     </div>
                 </div>
+                {% else %}
+                <!-- Manual card notice -->
+                <div class="card" style="text-align: center; padding: 3.5rem 2rem; border: 1px dashed rgba(255, 255, 255, 0.15); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.25rem;">
+                    <div style="font-size: 3.5rem; line-height: 1;">📝</div>
+                    <div style="display: flex; flex-direction: column; gap: 0.5rem; align-items: center;">
+                        <h3 style="font-weight: 700; margin: 0; color: #ffffff;">Manually Managed Credit Card</h3>
+                        <p style="color: var(--text-secondary); max-width: 420px; font-size: 0.9rem; line-height: 1.5; margin: 0;">
+                            This card is managed offline. There are no automated feeds synced via Plaid. Use the form on the right to update the balance, spending, payments, and credits.
+                        </p>
+                    </div>
+                </div>
+                {% endif %}
             </div>
 
             <!-- Right Column: Planning edit form -->
@@ -220,6 +229,34 @@
                             </label>
                         </div>
 
+                        {% if card.source == 'manual' %}
+                        <!-- Manual Card Value Edits -->
+                        <div style="margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px dashed rgba(255,255,255,0.08); margin-bottom: 1.5rem;">
+                            <h4 style="color: var(--accent-primary); margin-bottom: 1rem; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700;">Manual Card Details</h4>
+                            <div class="form-group">
+                                <label for="card_balance">Current Card Balance ($)</label>
+                                <input type="number" step="0.01" name="card_balance" id="card_balance" class="form-control" 
+                                       value="{{ (card.balance | abs | to_currency_raw) if card.balance is not none else '0.00' }}" required>
+                                <small style="color: var(--text-muted); font-size: 0.75rem;">Enter current balance/debt as a positive number.</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="cc_spending">Spent This Month ($)</label>
+                                <input type="number" step="0.01" name="cc_spending" id="cc_spending" class="form-control" 
+                                       value="{{ (summary.cc_spending | to_currency_raw) if summary else '0.00' }}" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="payments_made">Payments Made This Month ($)</label>
+                                <input type="number" step="0.01" name="payments_made" id="payments_made" class="form-control" 
+                                       value="{{ (summary.payments_made | to_currency_raw) if summary else '0.00' }}" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="refunds_or_credits">Refunds &amp; Credits ($)</label>
+                                <input type="number" step="0.01" name="refunds_or_credits" id="refunds_or_credits" class="form-control" 
+                                       value="{{ (summary.refunds_or_credits | to_currency_raw) if summary else '0.00' }}" required>
+                            </div>
+                        </div>
+                        {% endif %}
+
                         <!-- Notes -->
                         <div class="form-group">
                             <label for="notes">Notes / Details</label>
@@ -229,12 +266,17 @@
                         <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 1rem; font-size: 1rem;">Save Payment Plan</button>
                     </form>
                     
+                    {% if card.source == 'manual' %}
+                    <form action="/card/{{ card.ynab_account_id }}/{{ year }}/{{ month }}/delete" method="post" style="margin-top: 1rem;" onsubmit="return confirm('Are you sure you want to delete this manually created credit card? All history for this card will be permanently removed.');">
+                        <button type="submit" class="btn btn-secondary" style="width: 100%; background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.3); color: #f87171; font-size: 0.95rem; font-weight: 600; padding: 0.6rem;">🗑️ Delete Manual Card</button>
+                    </form>
+                    {% endif %}
+                    
                     <p style="font-size: 0.75rem; color: var(--text-muted); text-align: center; margin-top: 1rem;">
-                        Note: Edits to this planning card are saved locally in SQLite and are NOT written back to YNAB.
+                        Note: Edits to this planning card are saved locally in SQLite.
                     </p>
                 </div>
             </div>
         </div>
-    </div>
 </body>
 </html>

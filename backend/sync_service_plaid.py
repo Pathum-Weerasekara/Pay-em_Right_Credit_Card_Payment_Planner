@@ -41,33 +41,33 @@ def sync_data_from_plaid(db: Session, year_str: str, month_str: str):
 
             for acc in accounts:
                 acc_id = acc["account_id"]
-                plaid_account_ids.add(acc_id)
                 
                 # Plaid types: 'depository' (checking/savings), 'credit' (creditCard), etc.
+                # Skip non-credit card accounts to save free connection limits
                 is_card = acc["type"] == "credit"
-                is_cash = acc["type"] == "depository"
+                if not is_card:
+                    continue
 
+                plaid_account_ids.add(acc_id)
                 db_acc = db.query(Account).filter(Account.ynab_account_id == acc_id).first()
                 if not db_acc:
                     db_acc = Account(ynab_account_id=acc_id)
                     db.add(db_acc)
 
                 db_acc.name = acc["name"]
-                db_acc.type = "creditCard" if is_card else ("checking" if is_cash else acc["type"])
+                db_acc.type = "creditCard"
                 
                 # Standardize balance signs (Plaid credit card balance is positive, but in our db debt must be negative)
                 raw_balance = int(round(acc["balances"]["current"] * 1000))
-                db_acc.balance = -raw_balance if is_card else raw_balance
-                db_acc.is_credit_card = is_card
-                db_acc.is_cash = is_cash
+                db_acc.balance = -raw_balance
+                db_acc.is_credit_card = True
+                db_acc.is_cash = False
                 db_acc.is_active = True
                 db_acc.source = "plaid"
+                db_acc.plaid_item_id = item.item_id
                 db_acc.last_synced_at = datetime.utcnow()
 
-                if is_cash:
-                    cash_account_ids.add(acc_id)
-                elif is_card:
-                    card_account_ids.add(acc_id)
+                card_account_ids.add(acc_id)
 
             db.commit()
 
@@ -76,6 +76,10 @@ def sync_data_from_plaid(db: Session, year_str: str, month_str: str):
             transactions = tx_resp.get("transactions", [])
 
             for tx in transactions:
+                # Skip transactions that do not belong to our tracked credit card accounts
+                if tx["account_id"] not in card_account_ids:
+                    continue
+
                 tx_id = tx["transaction_id"]
                 db_tx = db.query(Transaction).filter(Transaction.ynab_transaction_id == tx_id).first()
                 if not db_tx:
@@ -91,13 +95,14 @@ def sync_data_from_plaid(db: Session, year_str: str, month_str: str):
                 
                 db_tx.payee_name = tx["name"]
                 db_tx.category_id = tx.get("category_id")
-                db_tx.category_name = ", ".join(tx.get("category", []))
+                category_list = tx.get("category") or []
+                db_tx.category_name = ", ".join(category_list)
                 db_tx.memo = tx.get("payment_channel")
                 db_tx.source = "plaid"
 
                 # Check if it's a transfer/payment
                 # Plaid transactions have a list of categories e.g. ["Transfer", "Credit Card Payment"]
-                categories = [c.lower() for c in tx.get("category", [])]
+                categories = [c.lower() for c in category_list]
                 is_transfer = "transfer" in categories or "payment" in categories or "credit card payment" in categories
 
                 if is_transfer:
@@ -178,36 +183,18 @@ def sync_data_from_plaid(db: Session, year_str: str, month_str: str):
             )
             db.add(plan)
 
-    # 5. Dynamic Payer Summary updates from Plaid cash account transactions
-    pathum_checking = db.query(Account).filter(Account.name.ilike("%Spend - Pathum%"), Account.source == "plaid").first()
-    ramesha_checking = db.query(Account).filter(Account.name.ilike("%Spend - Ramesha%"), Account.source == "plaid").first()
+    # 5. Dynamic Payer Summary updates from Plaid cash account transactions (N/A since we skip depository accounts)
+    pathum_checking = None
+    ramesha_checking = None
     
-    pathum_acc_ids = {pathum_checking.ynab_account_id} if pathum_checking else set()
-    ramesha_acc_ids = {ramesha_checking.ynab_account_id} if ramesha_checking else set()
+    pathum_acc_ids = set()
+    ramesha_acc_ids = set()
 
-    pathum_inflow_sum = sum(
-        tx.amount for tx in all_db_txs
-        if tx.account_id in pathum_acc_ids and tx.amount > 0 and not tx.transfer_account_id
-    )
-    ramesha_inflow_sum = sum(
-        tx.amount for tx in all_db_txs
-        if tx.account_id in ramesha_acc_ids and tx.amount > 0 and not tx.transfer_account_id
-    )
+    pathum_inflow_sum = 0
+    ramesha_inflow_sum = 0
 
-    pathum_zelle = abs(sum(
-        tx.amount for tx in all_db_txs
-        if tx.account_id in pathum_acc_ids
-        and tx.amount < 0
-        and tx.payee_name
-        and tx.payee_name.lower().startswith("zelle")
-    ))
-    ramesha_zelle = abs(sum(
-        tx.amount for tx in all_db_txs
-        if tx.account_id in ramesha_acc_ids
-        and tx.amount < 0
-        and tx.payee_name
-        and tx.payee_name.lower().startswith("zelle")
-    ))
+    pathum_zelle = 0
+    ramesha_zelle = 0
 
     for p_name in ["Pathum", "Ramesha"]:
         p_summary = db.query(PayerSummary).filter(
@@ -220,12 +207,34 @@ def sync_data_from_plaid(db: Session, year_str: str, month_str: str):
         current_checking = pathum_checking if p_name == "Pathum" else ramesha_checking
 
         if not p_summary:
+            # Let's check previous month's summary as fallback
+            prev_y, prev_m = int(year_str), int(month_str)
+            if prev_m == 1:
+                prev_month = f"{prev_y-1}-12"
+            else:
+                prev_month = f"{prev_y}-{str(prev_m-1).zfill(2)}"
+            
+            prev_p_summary = db.query(PayerSummary).filter(
+                PayerSummary.month == prev_month,
+                PayerSummary.payer_name == p_name
+            ).first()
+            
+            fallback_starting_cash = prev_p_summary.starting_cash if prev_p_summary else 0
+            fallback_bank_balance = prev_p_summary.current_bank_balance if prev_p_summary else 0
+            
+            # Seed default starting cash on 2026-06 if no previous month exists
+            if not prev_p_summary and month_str_formatted == "2026-06":
+                if p_name == "Ramesha":
+                    fallback_starting_cash = 400000 # $400.00
+                elif p_name == "Pathum":
+                    fallback_starting_cash = 3340000 # $3340.00
+
             p_summary = PayerSummary(
                 month=month_str_formatted,
                 payer_name=p_name,
-                starting_cash=calculated_earning if calculated_earning > 0 else 0,
+                starting_cash=calculated_earning if calculated_earning > 0 else fallback_starting_cash,
                 zelle_outflows=calculated_zelle,
-                current_bank_balance=current_checking.balance if current_checking else 0
+                current_bank_balance=current_checking.balance if current_checking else fallback_bank_balance
             )
             db.add(p_summary)
         else:

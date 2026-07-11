@@ -13,6 +13,8 @@ class Account(Base):
     id = Column(Integer, primary_key=True, index=True)
     ynab_account_id = Column(String, unique=True, index=True)  # Used as generic provider account ID (YNAB or Plaid)
     name = Column(String)
+    custom_name = Column(String, nullable=True)  # Customizable display name
+    plaid_item_id = Column(String, nullable=True)  # Associated Plaid Item ID
     type = Column(String)  # checking, savings, creditCard, etc.
     balance = Column(Integer)  # in milliunits
     is_credit_card = Column(Boolean, default=False)
@@ -20,6 +22,10 @@ class Account(Base):
     is_active = Column(Boolean, default=True)
     source = Column(String, default="plaid")  # "ynab" or "plaid"
     last_synced_at = Column(DateTime, default=datetime.utcnow)
+
+    @property
+    def display_name(self) -> str:
+        return self.custom_name if self.custom_name else self.name
 
 class Transaction(Base):
     __tablename__ = "transactions"
@@ -65,6 +71,7 @@ class PaymentPlan(Base):
     payer = Column(String, default="Pathum")  # "Pathum", "Ramesha"
     payment_type = Column(String, default="Man")  # "Man" (Manual), "Auto" (Automatic)
     is_done = Column(Boolean, default=False)  # Reconciled/Done status
+    is_active = Column(Boolean, default=True)  # Persistence for explicitly added/active plan cards
     due_date = Column(String, nullable=True)  # day of month e.g. "15"
     min_payment = Column(Integer, default=0)  # in milliunits
     unpaid_balance_override = Column(Integer, nullable=True)  # milliunits, manual override of auto-calc unpaid

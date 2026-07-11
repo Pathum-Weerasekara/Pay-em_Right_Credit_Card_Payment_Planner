@@ -7,6 +7,90 @@
     <link rel="stylesheet" href="/static/style.css">
     <!-- Plaid Link JS SDK -->
     <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+    <style>
+        /* Modal Overlay */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(10, 10, 15, 0.85);
+            backdrop-filter: blur(12px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+        /* Modal Card */
+        .modal-card {
+            background: #181824;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.6);
+            width: 95%;
+            max-width: 500px;
+            padding: 2rem;
+            animation: modalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        @keyframes modalFadeIn {
+            from { opacity: 0; transform: translateY(10px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .modal-title {
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .modal-subtitle {
+            font-size: 0.88rem;
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+            line-height: 1.4;
+        }
+        .card-rename-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+            margin-bottom: 1.75rem;
+            max-height: 250px;
+            overflow-y: auto;
+            padding-right: 0.25rem;
+        }
+        .card-rename-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+        .card-rename-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .card-rename-input {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: #ffffff;
+            padding: 0.6rem 0.8rem;
+            font-size: 0.95rem;
+            font-weight: 500;
+            width: 100%;
+            box-sizing: border-box;
+            outline: none;
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .card-rename-input:focus {
+            border-color: var(--accent-primary);
+            background: rgba(255, 255, 255, 0.07);
+        }
+    </style>
 </head>
 <body>
     <div class="container animate-fade-in">
@@ -16,8 +100,7 @@
                 <h1>Settings - Pay'em Right</h1>
             </div>
             <nav class="nav-links">
-                <!-- Redirects back to June 2026 as default monthly dashboard -->
-                <a href="/dashboard/2026/06" class="btn btn-secondary">← Back to Dashboard</a>
+                <a href="/" class="btn btn-secondary">← Back to Dashboard</a>
             </nav>
         </header>
 
@@ -57,15 +140,48 @@
                         {% if plaid_items %}
                             <div style="display: flex; flex-direction: column; gap: 0.75rem;">
                                 {% for item in plaid_items %}
-                                <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--panel-border); border-radius: var(--border-radius-md);">
-                                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                        <span style="font-size: 1.2rem;">🏛️</span>
-                                        <div>
-                                            <div style="font-weight: 600; font-size: 0.95rem;">{{ item.institution_name }}</div>
-                                            <div style="font-size: 0.75rem; color: var(--text-muted);">Linked on {{ item.created_at.strftime('%b %d, %Y') }}</div>
+                                <div style="display: flex; flex-direction: column; gap: 1rem; padding: 1rem; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--panel-border); border-radius: var(--border-radius-md);">
+                                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                            <span style="font-size: 1.2rem;">🏛️</span>
+                                            <div>
+                                                <div style="font-weight: 600; font-size: 0.95rem;">{{ item.institution_name }}</div>
+                                                <div style="font-size: 0.75rem; color: var(--text-muted);">Linked on {{ item.created_at.strftime('%b %d, %Y') }}</div>
+                                            </div>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                            <span class="badge badge-paid" style="font-size: 0.7rem; padding: 0.2rem 0.4rem;">Active</span>
+                                            <form action="/settings/plaid-item/delete/{{ item.item_id }}" method="post" style="margin: 0;" onsubmit="return confirm('Are you sure you want to unlink {{ item.institution_name }}? All local balances and transactions for this institution will be removed.');">
+                                                <button type="submit" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.4); color: #f87171;">Unlink</button>
+                                            </form>
                                         </div>
                                     </div>
-                                    <span class="badge badge-paid">Active Link</span>
+                                    
+                                    <!-- List of accounts under this institution -->
+                                    <div style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                                        {% set has_cards = false %}
+                                        {% for acc in accounts %}
+                                            {% if acc.plaid_item_id == item.item_id %}
+                                                {% set has_cards = true %}
+                                                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; padding-left: 0.5rem;">
+                                                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                                        <span style="font-size: 1rem;">💳</span>
+                                                        <div>
+                                                            <div style="font-weight: 500; font-size: 0.88rem; color: #ffffff;">{{ acc.display_name }}</div>
+                                                            {% if acc.custom_name %}
+                                                                <div style="font-size: 0.75rem; color: var(--text-muted);">Plaid: {{ acc.name }}</div>
+                                                            {% endif %}
+                                                        </div>
+                                                    </div>
+                                                    <!-- Simple inline rename form -->
+                                                    <form action="/settings/account/rename/{{ acc.ynab_account_id }}" method="post" style="margin: 0; display: flex; align-items: center; gap: 0.4rem;">
+                                                        <input type="text" name="new_name" placeholder="Rename..." value="{{ acc.custom_name or '' }}" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; padding: 0.25rem 0.5rem; font-size: 0.8rem; color: #ffffff; width: 150px; outline: none;">
+                                                        <button type="submit" class="btn btn-primary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; line-height: 1;">Save</button>
+                                                    </form>
+                                                </div>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </div>
                                 </div>
                                 {% endfor %}
                             </div>
@@ -75,65 +191,6 @@
                             </div>
                         {% endif %}
                     </div>
-                </div>
-
-                <!-- Account Roles Config -->
-                <div class="card">
-                    <h3 style="margin-bottom: 1rem; font-weight: 600;">Account Role Mapping &amp; Status</h3>
-                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
-                        Define which checking accounts represent cash/income inflows, and choose which credit cards to display.
-                    </p>
-
-                    {% if accounts %}
-                    <form action="/settings/accounts-sync" method="post">
-                        <div class="table-responsive" style="margin-bottom: 1.5rem;">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Account Name</th>
-                                        <th>Plaid Type</th>
-                                        <th>Is Cash Account?</th>
-                                        <th>Is Active?</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for acc in accounts %}
-                                    <tr>
-                                        <td style="font-weight: 500;">{{ acc.name }}</td>
-                                        <td>
-                                            <span style="font-size: 0.8rem; padding: 0.2rem 0.4rem; background: rgba(255,255,255,0.05); border-radius: 4px; color: var(--text-secondary);">
-                                                {{ acc.type }}
-                                            </span>
-                                        </td>
-                                        <td>
-                                            {% if acc.type in ['checking', 'savings'] or acc.is_cash %}
-                                            <label class="checkbox-label">
-                                                <input type="checkbox" name="cash_{{ acc.ynab_account_id }}" value="true" {% if acc.is_cash %}checked{% endif %}>
-                                                <span style="font-size: 0.85rem; color: var(--text-secondary);">Yes</span>
-                                            </label>
-                                            {% else %}
-                                            <span style="color: var(--text-muted); font-size: 0.85rem;">N/A (Credit Card)</span>
-                                            {% endif %}
-                                        </td>
-                                        <td>
-                                            <label class="checkbox-label">
-                                                <input type="checkbox" name="active_{{ acc.ynab_account_id }}" value="true" {% if acc.is_active %}checked{% endif %}>
-                                                <span style="font-size: 0.85rem; color: var(--text-secondary);">Active</span>
-                                            </label>
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <button type="submit" class="btn btn-success">Update Account Statuses</button>
-                    </form>
-                    {% else %}
-                    <div style="text-align: center; padding: 2rem; color: var(--text-muted); border: 1px dashed var(--panel-border); border-radius: var(--border-radius-md);">
-                        No accounts loaded. Link a bank account via Plaid and sync on the dashboard first.
-                    </div>
-                    {% endif %}
                 </div>
             </div>
 
@@ -163,6 +220,24 @@
                     </ul>
                 </div>
             </div>
+      <!-- Renaming Modal Popup -->
+    <div id="rename-modal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-title">
+                <span>💳</span> Customize Credit Card Names
+            </div>
+            <div class="modal-subtitle">
+                Customize how your newly connected cards will be displayed in the planner. Leave blank to use the bank's default name.
+            </div>
+            <form id="rename-modal-form" style="margin: 0;">
+                <div id="modal-card-list" class="card-rename-list">
+                    <!-- Populated dynamically via JS -->
+                </div>
+                <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
+                    <button type="button" id="modal-cancel-btn" class="btn btn-secondary" style="padding: 0.6rem 1.2rem;">Cancel</button>
+                    <button type="submit" class="btn btn-success" style="padding: 0.6rem 1.5rem; font-weight: 600;">Confirm &amp; Link</button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -174,7 +249,7 @@
                 try {
                     linkButton.disabled = true;
                     linkButton.innerText = 'Creating Link Session...';
-
+ 
                     // 1. Fetch the Link Token from FastAPI backend
                     const res = await fetch('/api/create_link_token', { method: 'POST' });
                     const data = await res.json();
@@ -185,28 +260,87 @@
                         linkButton.innerHTML = '🏦 Link a New Bank or Credit Card';
                         return;
                     }
-
+ 
                     // 2. Initialize Plaid Link
                     const handler = Plaid.create({
                         token: data.link_token,
                         onSuccess: async (public_token, metadata) => {
-                            // 3. Send public token to FastAPI backend to exchange for access token
-                            const formData = new FormData();
-                            formData.append('public_token', public_token);
-                            formData.append('institution_name', metadata.institution.name);
+                            linkButton.disabled = true;
+                            linkButton.innerHTML = '🔄 Processing...';
 
-                            const exchangeRes = await fetch('/api/exchange_public_token', {
-                                method: 'POST',
-                                body: formData
-                            });
-                            
-                            const exchangeData = await exchangeRes.json();
-                            if (exchangeData.success) {
-                                window.location.href = '/settings?success=Bank account linked successfully via Plaid!';
+                            const creditCards = (metadata.accounts || []).filter(acc => acc.type === 'credit' || acc.subtype === 'credit card');
+
+                            const exchangeToken = async (customNames = {}) => {
+                                linkButton.innerHTML = '🔄 Exchanging Token...';
+                                const formData = new FormData();
+                                formData.append('public_token', public_token);
+                                formData.append('institution_name', metadata.institution.name);
+                                formData.append('accounts_custom_names', JSON.stringify(customNames));
+
+                                try {
+                                    const exchangeRes = await fetch('/api/exchange_public_token', {
+                                        method: 'POST',
+                                        body: formData
+                                    });
+                                    
+                                    const exchangeData = await exchangeRes.json();
+                                    if (exchangeData.success) {
+                                        window.location.href = '/settings?success=Bank account linked successfully via Plaid!';
+                                    } else {
+                                        alert('Failed to link bank account: ' + exchangeData.error);
+                                        linkButton.disabled = false;
+                                        linkButton.innerHTML = '🏦 Link a New Bank or Credit Card';
+                                    }
+                                } catch (err) {
+                                    console.error(err);
+                                    alert('Error exchanging public token.');
+                                    linkButton.disabled = false;
+                                    linkButton.innerHTML = '🏦 Link a New Bank or Credit Card';
+                                }
+                            };
+
+                            // If we have credit cards connected, show the custom renaming modal
+                            if (creditCards.length > 0) {
+                                let listHtml = '';
+                                creditCards.forEach(card => {
+                                    const cardNameClean = card.name || 'Credit Card';
+                                    listHtml += `
+                                        <div class="card-rename-item">
+                                            <label class="card-rename-label">${cardNameClean} (•••• ${card.mask || 'xxxx'})</label>
+                                            <input type="text" class="card-rename-input" data-account-id="${card.id}" placeholder="${cardNameClean}" value="${cardNameClean}">
+                                        </div>
+                                    `;
+                                });
+                                document.getElementById('modal-card-list').innerHTML = listHtml;
+                                
+                                const modal = document.getElementById('rename-modal');
+                                modal.style.display = 'flex';
+
+                                // Handle cancel
+                                document.getElementById('modal-cancel-btn').onclick = () => {
+                                    modal.style.display = 'none';
+                                    linkButton.disabled = false;
+                                    linkButton.innerHTML = '🏦 Link a New Bank or Credit Card';
+                                };
+
+                                // Handle confirm
+                                document.getElementById('rename-modal-form').onsubmit = (e) => {
+                                    e.preventDefault();
+                                    modal.style.display = 'none';
+                                    
+                                    const customNames = {};
+                                    document.querySelectorAll('#modal-card-list .card-rename-input').forEach(input => {
+                                        const val = input.value.trim();
+                                        if (val) {
+                                            customNames[input.dataset.accountId] = val;
+                                        }
+                                    });
+                                    
+                                    exchangeToken(customNames);
+                                };
                             } else {
-                                alert('Failed to link bank account: ' + exchangeData.error);
-                                linkButton.disabled = false;
-                                linkButton.innerHTML = '🏦 Link a New Bank or Credit Card';
+                                // No credit cards linked, just exchange token directly
+                                exchangeToken();
                             }
                         },
                         onExit: (err, metadata) => {
@@ -214,6 +348,7 @@
                             linkButton.innerHTML = '🏦 Link a New Bank or Credit Card';
                             if (err != null) {
                                 console.error('Plaid Link exited with error: ', err);
+                                alert('Plaid Link Error: ' + (err.error_message || err.display_message || JSON.stringify(err)));
                             }
                         }
                     });
